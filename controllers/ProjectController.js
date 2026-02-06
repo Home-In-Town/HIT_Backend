@@ -1,9 +1,25 @@
 const ProjectService = require('../services/ProjectService');
+const Organization = require('../models/Organization');
 
 class ProjectController {
   async getAll(req, res) {
     try {
-      const projects = await ProjectService.getAllProjects();
+      const user = req.user;
+      let projects;
+
+      if (!user || user.role === 'admin') {
+        // Admin or unauthenticated: return all projects
+        projects = await ProjectService.getAllProjects();
+      } else if (user.role === 'builder') {
+        // Builder: return only their projects
+        projects = await ProjectService.getProjectsByBuilder(user.id);
+      } else if (user.role === 'agent') {
+        // Agent: return projects from their organizations
+        projects = await ProjectService.getProjectsForAgent(user.id);
+      } else {
+        projects = [];
+      }
+
       res.json(projects);
     } catch (error) {
       res.status(500).json({ message: error.message });
@@ -22,7 +38,15 @@ class ProjectController {
 
   async create(req, res) {
     try {
-      const project = await ProjectService.createProject(req.body);
+      const user = req.user;
+      const projectData = { ...req.body };
+
+      // If builder is creating, attach their ID
+      if (user && (user.role === 'builder' || user.role === 'admin')) {
+        projectData.builderId = user.id;
+      }
+
+      const project = await ProjectService.createProject(projectData);
       res.status(201).json(project);
     } catch (error) {
       res.status(500).json({ message: error.message });
@@ -45,7 +69,7 @@ class ProjectController {
       if (!success) return res.status(404).json({ message: 'Project not found' });
       res.status(204).send();
     } catch (error) {
-       res.status(500).json({ message: error.message });
+      res.status(500).json({ message: error.message });
     }
   }
 
@@ -55,7 +79,7 @@ class ProjectController {
       res.json(project);
     } catch (error) {
       if (error.message === 'Project not found') {
-          return res.status(404).json({ message: error.message });
+        return res.status(404).json({ message: error.message });
       }
       res.status(500).json({ message: error.message });
     }
@@ -73,3 +97,4 @@ class ProjectController {
 }
 
 module.exports = new ProjectController();
+

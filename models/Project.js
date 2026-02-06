@@ -4,6 +4,14 @@ const projectSchema = new mongoose.Schema({
   projectName: { type: String, required: true },
   projectType: { type: String, default: 'flat' },
   builderName: String,
+
+  // RBAC: Which builder created this project
+  builderId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    index: true
+  },
+
   city: String,
   location: String,
   latitude: Number,
@@ -12,7 +20,7 @@ const projectSchema = new mongoose.Schema({
   reraApproved: { type: Boolean, default: false },
   reraNumber: String,
   projectStatus: { type: String, default: 'pre-launch' },
-  
+
   pricing: {
     startingPrice: Number,
     pricePerSqFt: Number,
@@ -20,7 +28,7 @@ const projectSchema = new mongoose.Schema({
     paymentPlan: String,
     bankLoanAvailable: { type: Boolean, default: false }
   },
-  
+
   configuration: {
     bhkOptions: [String],
     carpetAreaRange: String,
@@ -29,22 +37,22 @@ const projectSchema = new mongoose.Schema({
     facingOptions: [String],
     gatedCommunity: { type: Boolean, default: false }
   },
-  
+
   amenities: [String],
-  
+
   media: {
     coverImage: String,
     galleryImages: [String],
     videos: [String],
     brochurePdf: String
   },
-  
+
   cta: {
     buttonText: { type: String, default: 'Book Site Visit' },
     whatsappNumber: String,
     callNumber: String
   },
-  
+
   slug: { type: String, unique: true, sparse: true },
   status: { type: String, default: 'draft' }
 }, {

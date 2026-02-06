@@ -1,4 +1,5 @@
 const ProjectRepository = require('../repositories/ProjectRepository');
+const Organization = require('../models/Organization');
 const slugify = require('../utils/slugify');
 
 class ProjectService {
@@ -8,6 +9,29 @@ class ProjectService {
 
   async getProjectById(id) {
     return await ProjectRepository.getById(id);
+  }
+
+  /**
+   * Get projects created by a specific builder
+   */
+  async getProjectsByBuilder(builderId) {
+    return await ProjectRepository.getByBuilderId(builderId);
+  }
+
+  /**
+   * Get projects assigned to organizations that the agent belongs to
+   */
+  async getProjectsForAgent(agentId) {
+    // Find all organizations where this agent is a member
+    const orgs = await Organization.find({ agents: agentId }).select('projects');
+
+    // Flatten all project IDs from all organizations
+    const projectIds = orgs.flatMap(org => org.projects);
+
+    // Remove duplicates and return unique projects
+    const uniqueProjectIds = [...new Set(projectIds.map(id => id.toString()))];
+
+    return await ProjectRepository.getByIds(uniqueProjectIds);
   }
 
   async createProject(data) {
@@ -25,9 +49,9 @@ class ProjectService {
   async publishProject(id) {
     const project = await this.getProjectById(id);
     if (!project) throw new Error('Project not found');
-    
-    const slug = slugify(project.projectName || project.name); 
-    
+
+    const slug = slugify(project.projectName || project.name);
+
     return await ProjectRepository.publish(id, slug);
   }
 
@@ -37,3 +61,4 @@ class ProjectService {
 }
 
 module.exports = new ProjectService();
+
