@@ -22,6 +22,23 @@ class ProjectRepository {
     return mapProject(project);
   }
 
+  /**
+   * Get projects by builder ID (for builder role)
+   */
+  async getByBuilderId(builderId) {
+    const projects = await Project.find({ builderId }).lean();
+    return projects.map(mapProject);
+  }
+
+  /**
+   * Get projects by array of IDs (for agent role)
+   */
+  async getByIds(projectIds) {
+    if (!projectIds || projectIds.length === 0) return [];
+    const projects = await Project.find({ _id: { $in: projectIds } }).lean();
+    return projects.map(mapProject);
+  }
+
   async create(projectData) {
     const project = new Project(projectData);
     await project.save();
@@ -30,9 +47,9 @@ class ProjectRepository {
 
   async update(id, updates) {
     const project = await Project.findByIdAndUpdate(
-    id,
-    { ...updates, updatedAt: new Date() },
-    { new: true }
+      id,
+      { ...updates, updatedAt: new Date() },
+      { new: true }
     ).lean();
     return mapProject(project);
   }
@@ -46,7 +63,7 @@ class ProjectRepository {
     const CtaClick = require('../models/CtaClick');
     await Visit.deleteMany({ projectId: id });
     await CtaClick.deleteMany({ projectId: id });
-    
+
     return true;
   }
 
