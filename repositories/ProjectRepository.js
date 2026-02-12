@@ -80,6 +80,10 @@ class ProjectRepository {
     const project = await Project.findOne({ slug }).lean();
     return mapProject(project);
   }
+  async getPublished() {
+    const projects = await Project.find({ status: 'published' }).lean();
+    return projects.map(mapProject);
+  }
 }
 
 module.exports = new ProjectRepository();
