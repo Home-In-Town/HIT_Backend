@@ -6,6 +6,7 @@ const router = express.Router();
 /**
  * Get Public Project Page
  */
+router.get("/projects", (req, res) => ProjectController.getAllPublic(req, res));
 router.get("/projects/:slug", (req, res) => ProjectController.getOneBySlug(req, res));
 
 module.exports = router;

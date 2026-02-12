@@ -80,23 +80,24 @@ router.get("/mock-accounts", async (req, res) => {
  */
 router.post("/login-by-name", async (req, res) => {
     try {
-        const { name, role } = req.body;
+        const { name, role, phone } = req.body;
 
-        if (!name || !role) {
-            return res.status(400).json({ error: "Name and role are required" });
+        if (!name || !role || !phone) {
+            return res.status(400).json({ error: "Name, role, and phone are required" });
         }
 
         // Case-insensitive search for name
         const user = await User.findOne({
             name: { $regex: new RegExp(`^${name.trim()}$`, 'i') },
+            phone: phone.trim(),
             role: role,
             isActive: true
         }).lean();
 
         if (!user) {
             return res.status(404).json({
-                error: "User not found",
-                hint: `No ${role} found with name "${name}". Check spelling.`
+                error: "Authentication failed",
+                hint: `No active user found matching name "${name}", role "${role}", and phone "${phone}".`
             });
         }
 

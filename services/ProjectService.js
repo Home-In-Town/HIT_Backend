@@ -58,6 +58,10 @@ class ProjectService {
   async getPublicProject(slug) {
     return await ProjectRepository.getBySlug(slug);
   }
+
+  async getPublicProjects() {
+    return await ProjectRepository.getPublished();
+  }
 }
 
 module.exports = new ProjectService();

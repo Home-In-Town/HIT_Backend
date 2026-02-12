@@ -1,5 +1,7 @@
 const ProjectService = require('../services/ProjectService');
 const Organization = require('../models/Organization');
+const User = require('../models/User');
+const Project = require('../models/Project');
 
 class ProjectController {
   async getAll(req, res) {
@@ -94,7 +96,112 @@ class ProjectController {
       res.status(500).json({ message: error.message });
     }
   }
+
+  async getAllPublic(req, res) {
+    try {
+      const projects = await ProjectService.getPublicProjects();
+      res.json(projects);
+    } catch (error) {
+      res.status(500).json({ message: error.message });
+    }
+  }
+
+  // Get projects by builder phone
+  async getProjectsByBuilderPhone(req, res) {
+    try {
+      const { phone } = req.params;
+
+      // 1. Find User (Builder) by phone
+      // We look for any user with this phone who is a builder or admin
+      const user = await User.findOne({
+        phone: phone,
+        role: { $in: ['builder', 'admin'] }
+      });
+
+      if (!user) {
+        return res.status(404).json({ message: 'Builder not found with this phone number' });
+      }
+
+      // 2. Find Projects for this Builder
+      const projects = await Project.find({
+        builderId: user._id,
+        status: { $ne: 'deleted' }
+      })
+        .select('projectName slug _id coverImage city')
+        .sort('-createdAt');
+
+      res.status(200).json({
+        builder: {
+          name: user.name,
+          id: user._id
+        },
+        projects
+      });
+
+    } catch (error) {
+      console.error('Error fetching builder projects:', error);
+      res.status(500).json({ message: error.message });
+    }
+  }
+
+  // Get projects by builder ID (Public Portfolio)
+  async getProjectsByBuilderId(req, res) {
+    try {
+      const { builderId } = req.params;
+
+      // 1. Find User (Builder)
+      const user = await User.findOne({ _id: builderId }); // Use _id directly
+
+      if (!user) {
+        return res.status(404).json({ message: 'Builder not found' });
+      }
+
+      // 2. Find Projects for this Builder
+      const projects = await Project.find({
+        builderId: user._id,
+        status: { $ne: 'deleted' }
+      })
+        .select('projectName slug _id coverImage city startingPrice') // Add needed fields
+        .sort('-createdAt');
+
+      res.status(200).json({
+        builder: {
+          name: user.name,
+          id: user._id,
+          companyName: user.companyName
+        },
+        projects
+      });
+
+    } catch (error) {
+      console.error('Error fetching builder portfolio:', error);
+      res.status(500).json({ message: error.message });
+    }
+  }
+
+  // Verify User by Phone (Agent/Builder/Admin)
+  async verifyUserByPhone(req, res) {
+    try {
+      const { phone } = req.params;
+
+      const user = await User.findOne({ phone: phone });
+
+      if (!user) {
+        return res.status(404).json({ message: 'User not found' });
+      }
+
+      res.status(200).json({
+        id: user._id,
+        name: user.name,
+        role: user.role,
+        companyName: user.companyName
+      });
+
+    } catch (error) {
+      console.error('Error verifying user:', error);
+      res.status(500).json({ message: error.message });
+    }
+  }
 }
 
 module.exports = new ProjectController();
-
