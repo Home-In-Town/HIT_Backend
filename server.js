@@ -25,9 +25,10 @@ app.use("/api/contacts", require("./routes/contact.routes"));
 
 const PORT = process.env.PORT || 5001;
 
-// Connect to MongoDB then start server
-connectDB().then(() => {
-  app.listen(PORT, () => {
-    console.log(`🚀 Backend running on http://localhost:${PORT}`);
-  });
+// Start server immediately (Cloud Run needs port open fast)
+app.listen(PORT, () => {
+  console.log(`🚀 Backend running on http://localhost:${PORT}`);
 });
+
+// Connect to MongoDB in the background
+connectDB();
