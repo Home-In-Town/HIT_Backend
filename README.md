@@ -8,7 +8,6 @@ This is the backend service for the Sales Website application. It handles projec
 - **Publishing System**: Publish projects to generate unique, publicly accessible URLs (slugs).
 - **Public API**: Serve project data to public-facing pages.
 - **Analytics Tracking**: Track visitor interactions including page views, time spent, and CTA clicks (WhatsApp/Call).
-- **Voice API Support**: Proxy endpoints for calls, status checks, and call logging.
 
 ## 🛠️ Tech Stack
 
@@ -38,7 +37,6 @@ This is the backend service for the Sales Website application. It handles projec
    ```env
    PORT=5001
    MONGODB_URI=your_mongodb_connection_string
-   VOICE_API_BASE_URL=https://api.yourvoiceprovider.com
    ```
 
 ## 🏃‍♂️ Running the Server
@@ -90,15 +88,6 @@ The server runs on `http://localhost:5001` by default.
 | `GET` | `/overview` | Get system-wide analytics overview |
 | `GET` | `/projects/:projectId` | Get aggregated analytics for a project |
 
-### Voice API (`/api/calls`)
-
-| Method | Endpoint | Description |
-| :--- | :--- | :--- |
-| `POST` | `/new` | Initiate a new outbound call |
-| `GET` | `/status/:callId` | Get call status by ID |
-| `GET` | `/logs` | Get all call logs |
-| `GET` | `/logs/project/:projectId` | Get call logs for a specific project |
-| `GET` | `/logs/number/:number` | Get call logs for a specific phone number |
 
 ## ⚙️ Configuration
 

@@ -1,5 +1,6 @@
 const AnalyticsRepository = require('../repositories/AnalyticsRepository');
 const ProjectService = require('./ProjectService');
+const WebhookService = require('./WebhookService');
 
 class AnalyticsService {
   async trackPageView(data) {
@@ -7,13 +8,39 @@ class AnalyticsService {
       ...data,
       timestamp: new Date()
     };
-    return await AnalyticsRepository.addVisit(visit);
+    const result = await AnalyticsRepository.addVisit(visit);
+
+    // Send webhook event (non-blocking)
+    if (data.leadId) {
+      WebhookService.sendPageViewEvent({
+        leadId: data.leadId,
+        projectId: data.projectId,
+        projectSlug: data.projectSlug,
+        visitId: result?.id || result?._id?.toString(),
+        userAgent: data.userAgent,
+        referrer: data.referrer
+      }).catch(err => console.error('Webhook error:', err.message));
+    }
+
+    return result;
   }
 
   async trackTime(data) {
-    const { visitId, duration, projectId } = data;
+    const { visitId, duration, projectId, leadId } = data;
     if (visitId && duration) {
-      return await AnalyticsRepository.updateVisitDuration(visitId, duration, projectId);
+      const result = await AnalyticsRepository.updateVisitDuration(visitId, duration, projectId);
+
+      // Send webhook event (non-blocking)
+      if (leadId) {
+        WebhookService.sendTimeUpdateEvent({
+          leadId,
+          projectId,
+          visitId,
+          duration
+        }).catch(err => console.error('Webhook error:', err.message));
+      }
+
+      return result;
     }
     return false;
   }
@@ -23,7 +50,32 @@ class AnalyticsService {
       ...data,
       timestamp: new Date()
     };
-    return await AnalyticsRepository.addCtaClick(click);
+    const result = await AnalyticsRepository.addCtaClick(click);
+
+    // Send webhook event (non-blocking)
+    if (data.leadId) {
+      WebhookService.sendCtaClickEvent({
+        leadId: data.leadId,
+        projectId: data.projectId,
+        ctaType: data.ctaType,
+        clickId: result?.id || result?._id?.toString()
+      }).catch(err => console.error('Webhook error:', err.message));
+    }
+
+    return result;
+  }
+
+  async trackFormSubmit(data) {
+    // Send webhook event for form submission
+    if (data.leadId) {
+      await WebhookService.sendFormSubmitEvent({
+        leadId: data.leadId,
+        projectId: data.projectId,
+        formData: data.formData
+      }).catch(err => console.error('Webhook error:', err.message));
+    }
+
+    return { success: true };
   }
 
   async getProjectStats(projectId) {
@@ -43,13 +95,11 @@ class AnalyticsService {
 
   async getSystemOverview() {
     const projects = await ProjectService.getAllProjects();
-    
     const results = [];
     for (const project of projects) {
       const projectId = project._id?.toString() || project.id;
       const visits = await AnalyticsRepository.getVisitsByProject(projectId);
       const ctaClicks = await AnalyticsRepository.getCtaClicksByProject(projectId);
-      
       results.push({
         id: projectId,
         name: project.projectName || project.name,
@@ -59,10 +109,10 @@ class AnalyticsService {
         ctaClicks: ctaClicks.length,
         calls: ctaClicks.filter(c => c.ctaType === 'call').length,
         whatsapp: ctaClicks.filter(c => c.ctaType === 'whatsapp').length,
-        forms: ctaClicks.filter(c => c.ctaType === 'form').length 
+        forms: ctaClicks.filter(c => c.ctaType === 'form').length
       });
     }
-    
+
     return results;
   }
 }

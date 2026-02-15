@@ -24,7 +24,7 @@ class AnalyticsController {
       await AnalyticsService.trackCtaClick(req.body);
       res.json({ success: true });
     } catch (error) {
-       res.status(500).json({ message: error.message });
+      res.status(500).json({ message: error.message });
     }
   }
 
@@ -41,6 +41,15 @@ class AnalyticsController {
     try {
       const stats = await AnalyticsService.getSystemOverview();
       res.json(stats);
+    } catch (error) {
+      res.status(500).json({ message: error.message });
+    }
+  }
+
+  async trackFormSubmit(req, res) {
+    try {
+      await AnalyticsService.trackFormSubmit(req.body);
+      res.json({ success: true });
     } catch (error) {
       res.status(500).json({ message: error.message });
     }
