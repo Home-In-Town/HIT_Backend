@@ -20,6 +20,12 @@ async function mockAuthMiddleware(req, res, next) {
         return next();
     }
 
+    const mongoose = require('mongoose');
+    if (!mongoose.Types.ObjectId.isValid(mockUserId)) {
+        req.user = null;
+        return next();
+    }
+
     try {
         const user = await User.findById(mockUserId);
 

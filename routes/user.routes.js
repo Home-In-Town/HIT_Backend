@@ -79,6 +79,7 @@ router.get("/mock-accounts", async (req, res) => {
  * Used for mock login flow
  */
 router.post("/login-by-name", async (req, res) => {
+    console.log(`📡 Login Request: ${JSON.stringify(req.body)}`);
     try {
         const { name, role, phone } = req.body;
 

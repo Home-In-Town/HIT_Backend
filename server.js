@@ -1,5 +1,9 @@
 require('dotenv').config();
 const express = require("express");
+const checkEnv = require("./utils/checkEnv");
+
+// Validate environment before anything else
+checkEnv();
 const cors = require("cors");
 const connectDB = require("./config/db");
 
@@ -9,6 +13,7 @@ const trackingRoutes = require("./routes/tracking.routes");
 const analyticsRoutes = require("./routes/analytics.routes");
 const organizationRoutes = require("./routes/organization.routes");
 const userRoutes = require("./routes/user.routes");
+const { initWebhookCron } = require("./services/WebhookCron");
 
 const app = express();
 app.use(cors());
@@ -29,5 +34,8 @@ const PORT = process.env.PORT || 5001;
 connectDB().then(() => {
   app.listen(PORT, () => {
     console.log(`🚀 Backend running on http://localhost:${PORT}`);
+    // Initialize services
+    initWebhookCron();
   });
 });
+
