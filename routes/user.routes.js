@@ -125,13 +125,14 @@ router.get("/by-role/:role", async (req, res) => {
         }
 
         const users = await User.find({ role, isActive: true })
-            .select("_id name email")
+            .select("_id name email phone")
             .lean();
 
         const mapped = users.map(u => ({
             id: u._id.toString(),
             name: u.name,
-            email: u.email
+            email: u.email,
+            phone: u.phone
         }));
 
         res.json(mapped);

@@ -9,6 +9,12 @@ const trackingRoutes = require("./routes/tracking.routes");
 const analyticsRoutes = require("./routes/analytics.routes");
 const organizationRoutes = require("./routes/organization.routes");
 const userRoutes = require("./routes/user.routes");
+const { initWebhookCron } = require("./services/WebhookCron");
+
+const checkEnv = require("./utils/checkEnv");
+
+// Validate environment before anything else
+checkEnv();
 
 const app = express();
 app.use(cors());
@@ -21,6 +27,7 @@ app.use("/api/analytics", analyticsRoutes);
 app.use("/api/organizations", organizationRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/contacts", require("./routes/contact.routes"));
+app.use("/api/internal", require("./routes/internalRoutes"));
 
 
 const PORT = process.env.PORT || 5001;
@@ -31,4 +38,7 @@ app.listen(PORT, () => {
 });
 
 // Connect to MongoDB in the background
-connectDB();
+connectDB().then(() => {
+  // Initialize services that depend on DB
+  initWebhookCron();
+});
