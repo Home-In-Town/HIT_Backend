@@ -27,6 +27,7 @@ app.use("/api/analytics", analyticsRoutes);
 app.use("/api/organizations", organizationRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/contacts", require("./routes/contact.routes"));
+app.use("/api/internal", require("./routes/internalRoutes"));
 
 
 const PORT = process.env.PORT || 5001;
