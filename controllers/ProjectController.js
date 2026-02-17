@@ -149,8 +149,28 @@ class ProjectController {
     try {
       const { builderId } = req.params;
 
+      // Helper: Check if string is valid MongoDB ObjectId
+      const isValidObjectId = (str) => {
+        return /^[0-9a-fA-F]{24}$/.test(str);
+      };
+
+      let user;
+
       // 1. Find User (Builder)
-      const user = await User.findOne({ _id: builderId }); // Use _id directly
+      if (isValidObjectId(builderId)) {
+        // Try to find by primary ID first
+        user = await User.findById(builderId);
+      }
+
+      // If not found by ID (or invalid ObjectId), try other fields
+      if (!user) {
+        user = await User.findOne({
+          $or: [
+            { oldId: builderId },
+            { builderCode: builderId }
+          ]
+        });
+      }
 
       if (!user) {
         return res.status(404).json({ message: 'Builder not found' });
@@ -178,6 +198,7 @@ class ProjectController {
       res.status(500).json({ message: error.message });
     }
   }
+
 
   // Verify User by Phone (Agent/Builder/Admin)
   async verifyUserByPhone(req, res) {
