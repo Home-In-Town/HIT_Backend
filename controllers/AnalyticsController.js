@@ -37,14 +37,21 @@ class AnalyticsController {
     }
   }
 
-  async getOverview(req, res) {
-    try {
-      const stats = await AnalyticsService.getSystemOverview();
-      res.json(stats);
-    } catch (error) {
-      res.status(500).json({ message: error.message });
+ async getOverview(req, res) {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ message: "Authentication required" });
     }
+
+    const stats = await AnalyticsService.getOverviewByUser(req.user);
+    res.json(stats);
+
+  } catch (error) {
+    res.status(500).json({ message: error.message });
   }
+}
+
+
 
   async trackFormSubmit(req, res) {
     try {

@@ -115,6 +115,88 @@ class AnalyticsService {
 
     return results;
   }
+
+ async getOverviewByUser(user) {
+  if (!user) {
+    throw new Error("User required");
+  }
+
+  let projects = [];
+
+  // =============================
+  // ADMIN → All Projects
+  // =============================
+  if (user.role === "admin") {
+    projects = await ProjectService.getAllProjects();
+  }
+
+  // =============================
+  // BUILDER → Created Projects
+  // =============================
+  else if (user.role === "builder") {
+    projects = await ProjectService.getProjectsByBuilder(user.id);
+  }
+
+  // =============================
+  // AGENT → Created + Assigned
+  // =============================
+  else if (user.role === "agent") {
+
+    // 1️⃣ Projects created by agent
+    const createdProjects = await ProjectService.getProjectsByBuilder(user.id);
+
+    // 2️⃣ Projects assigned via organization
+    const assignedProjects = await ProjectService.getProjectsForAgent(user.id);
+
+    // 3️⃣ Merge and remove duplicates safely
+    const projectMap = new Map();
+
+    [...createdProjects, ...assignedProjects].forEach(project => {
+      const id = project._id?.toString() || project.id;
+      if (id) {
+        projectMap.set(id, project);
+      }
+    });
+
+    projects = Array.from(projectMap.values());
+  }
+
+  // =============================
+  // Generate Analytics
+  // =============================
+  const results = [];
+
+  for (const project of projects) {
+    const projectId = project._id?.toString() || project.id;
+    if (!projectId) continue;
+
+    const visits = await AnalyticsRepository.getVisitsByProject(projectId);
+    const ctaClicks = await AnalyticsRepository.getCtaClicksByProject(projectId);
+
+    results.push({
+      id: projectId,
+      name: project.projectName || project.name,
+      totalVisits: visits.length,
+      uniqueLeads: new Set(
+        visits.map(v => v.leadId).filter(Boolean)
+      ).size,
+      totalTimeSpent: visits.reduce(
+        (acc, v) => acc + (v.duration || 0),
+        0
+      ),
+      ctaClicks: ctaClicks.length,
+      calls: ctaClicks.filter(c => c.ctaType === "call").length,
+      whatsapp: ctaClicks.filter(c => c.ctaType === "whatsapp").length,
+      forms: ctaClicks.filter(c => c.ctaType === "form").length
+    });
+  }
+
+  return results;
 }
+
+
+}
+
+
 
 module.exports = new AnalyticsService();

@@ -25,11 +25,22 @@ class ProjectService {
     // Find all organizations where this agent is a member
     const orgs = await Organization.find({ agents: agentId }).select('projects');
 
-    // Flatten all project IDs from all organizations
-    const projectIds = orgs.flatMap(org => org.projects);
+   // Safely flatten project IDs
+  const projectIds = orgs.flatMap(org => org.projects ?? []);
 
-    // Remove duplicates and return unique projects
-    const uniqueProjectIds = [...new Set(projectIds.map(id => id.toString()))];
+  // Remove null/undefined safely
+  const uniqueProjectIds = [
+    ...new Set(
+      projectIds
+        .filter(id => id) 
+        .map(id => id.toString())
+    )
+  ];
+
+  if (uniqueProjectIds.length === 0) {
+    return []; //  Return empty array instead of null
+  }
+
 
     return await ProjectRepository.getByIds(uniqueProjectIds);
   }
