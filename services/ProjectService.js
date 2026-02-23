@@ -1,5 +1,4 @@
 const ProjectRepository = require('../repositories/ProjectRepository');
-const Organization = require('../models/Organization');
 const slugify = require('../utils/slugify');
 
 class ProjectService {
@@ -12,26 +11,10 @@ class ProjectService {
   }
 
   /**
-   * Get projects created by a specific builder
+   * Get projects owned by a specific user (builder or agent)
    */
-  async getProjectsByBuilder(builderId) {
-    return await ProjectRepository.getByBuilderId(builderId);
-  }
-
-  /**
-   * Get projects assigned to organizations that the agent belongs to
-   */
-  async getProjectsForAgent(agentId) {
-    // Find all organizations where this agent is a member
-    const orgs = await Organization.find({ agents: agentId }).select('projects');
-
-    // Flatten all project IDs from all organizations
-    const projectIds = orgs.flatMap(org => org.projects);
-
-    // Remove duplicates and return unique projects
-    const uniqueProjectIds = [...new Set(projectIds.map(id => id.toString()))];
-
-    return await ProjectRepository.getByIds(uniqueProjectIds);
+  async getProjectsByOwner(ownerId) {
+    return await ProjectRepository.getByOwner(ownerId);
   }
 
   async createProject(data) {
@@ -65,4 +48,3 @@ class ProjectService {
 }
 
 module.exports = new ProjectService();
-

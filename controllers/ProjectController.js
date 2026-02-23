@@ -1,5 +1,4 @@
 const ProjectService = require('../services/ProjectService');
-const Organization = require('../models/Organization');
 const User = require('../models/User');
 const Project = require('../models/Project');
 
@@ -12,12 +11,9 @@ class ProjectController {
       if (!user || user.role === 'admin') {
         // Admin or unauthenticated: return all projects
         projects = await ProjectService.getAllProjects();
-      } else if (user.role === 'builder') {
-        // Builder: return only their projects
-        projects = await ProjectService.getProjectsByBuilder(user.id);
-      } else if (user.role === 'agent') {
-        // Agent: return projects from their organizations
-        projects = await ProjectService.getProjectsForAgent(user.id);
+      } else if (user.role === 'builder' || user.role === 'agent') {
+        // Builder or Agent: return only their owned projects
+        projects = await ProjectService.getProjectsByOwner(user.id);
       } else {
         projects = [];
       }
@@ -43,9 +39,9 @@ class ProjectController {
       const user = req.user;
       const projectData = { ...req.body };
 
-      // If builder is creating, attach their ID
-      if (user && (user.role === 'builder' || user.role === 'admin')) {
-        projectData.builderId = user.id;
+      // Attach the owner (builder or agent) ID
+      if (user && (user.role === 'builder' || user.role === 'agent' || user.role === 'admin')) {
+        projectData.owner = user.id;
       }
 
       const project = await ProjectService.createProject(projectData);
@@ -106,25 +102,24 @@ class ProjectController {
     }
   }
 
-  // Get projects by builder phone
-  async getProjectsByBuilderPhone(req, res) {
+  // Get projects by owner phone (builder or agent)
+  async getProjectsByOwnerPhone(req, res) {
     try {
       const { phone } = req.params;
 
-      // 1. Find User (Builder) by phone
-      // We look for any user with this phone who is a builder or admin
+      // Find User (builder or agent) by phone
       const user = await User.findOne({
         phone: phone,
-        role: { $in: ['builder', 'admin'] }
+        role: { $in: ['builder', 'agent', 'admin'] }
       });
 
       if (!user) {
-        return res.status(404).json({ message: 'Builder not found with this phone number' });
+        return res.status(404).json({ message: 'User not found with this phone number' });
       }
 
-      // 2. Find Projects for this Builder
+      // Find Projects owned by this user
       const projects = await Project.find({
-        builderId: user._id,
+        owner: user._id,
         status: { $ne: 'deleted' }
       })
         .select('projectName slug _id coverImage city')
@@ -139,15 +134,15 @@ class ProjectController {
       });
 
     } catch (error) {
-      console.error('Error fetching builder projects:', error);
+      console.error('Error fetching owner projects:', error);
       res.status(500).json({ message: error.message });
     }
   }
 
-  // Get projects by builder ID (Public Portfolio)
-  async getProjectsByBuilderId(req, res) {
+  // Get projects by owner ID (Public Portfolio)
+  async getProjectsByOwnerId(req, res) {
     try {
-      const { builderId } = req.params;
+      const { ownerId } = req.params;
 
       // Helper: Check if string is valid MongoDB ObjectId
       const isValidObjectId = (str) => {
@@ -156,32 +151,32 @@ class ProjectController {
 
       let user;
 
-      // 1. Find User (Builder)
-      if (isValidObjectId(builderId)) {
+      // 1. Find User (Builder/Agent)
+      if (isValidObjectId(ownerId)) {
         // Try to find by primary ID first
-        user = await User.findById(builderId);
+        user = await User.findById(ownerId);
       }
 
       // If not found by ID (or invalid ObjectId), try other fields
       if (!user) {
         user = await User.findOne({
           $or: [
-            { oldId: builderId },
-            { builderCode: builderId }
+            { oldId: ownerId },
+            { builderCode: ownerId }
           ]
         });
       }
 
       if (!user) {
-        return res.status(404).json({ message: 'Builder not found' });
+        return res.status(404).json({ message: 'User not found' });
       }
 
-      // 2. Find Projects for this Builder
+      // 2. Find Projects owned by this user
       const projects = await Project.find({
-        builderId: user._id,
+        owner: user._id,
         status: { $ne: 'deleted' }
       })
-        .select('projectName slug _id coverImage city startingPrice') // Add needed fields
+        .select('projectName slug _id coverImage city startingPrice')
         .sort('-createdAt');
 
       res.status(200).json({
@@ -194,7 +189,7 @@ class ProjectController {
       });
 
     } catch (error) {
-      console.error('Error fetching builder portfolio:', error);
+      console.error('Error fetching owner portfolio:', error);
       res.status(500).json({ message: error.message });
     }
   }

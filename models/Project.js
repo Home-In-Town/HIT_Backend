@@ -5,8 +5,8 @@ const projectSchema = new mongoose.Schema({
   projectType: { type: String, default: 'flat' },
   builderName: String,
 
-  // RBAC: Which builder created this project
-  builderId: {
+  // RBAC: Which builder/agent owns this project
+  owner: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     index: true

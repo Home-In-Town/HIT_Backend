@@ -23,10 +23,10 @@ class ProjectRepository {
   }
 
   /**
-   * Get projects by builder ID (for builder role)
+   * Get projects by owner ID (for builder/agent role)
    */
-  async getByBuilderId(builderId) {
-    const projects = await Project.find({ builderId }).lean();
+  async getByOwner(ownerId) {
+    const projects = await Project.find({ owner: ownerId }).lean();
     return projects.map(mapProject);
   }
 
