@@ -12,12 +12,6 @@ router.get("/", (req, res) => ProjectController.getAll(req, res));
 // Create a new project
 router.post("/", (req, res) => ProjectController.create(req, res));
 
-// Get projects by builder phone (Public/New endpoint)
-router.get("/by-builder-phone/:phone", (req, res) => ProjectController.getProjectsByBuilderPhone(req, res));
-
-// Get projects by builder ID (Public Portfolio)
-router.get("/public/builders/:builderId/projects", (req, res) => ProjectController.getProjectsByBuilderId(req, res));
-
 // Verify User by Phone (Public/New endpoint)
 router.get("/verify-user/:phone", (req, res) => ProjectController.verifyUserByPhone(req, res));
 
@@ -35,5 +29,12 @@ router.post("/:projectId/publish", (req, res) => ProjectController.publish(req, 
 
 // Save landmarks
 router.put("/:projectId/landmarks", (req, res) => ProjectController.saveLandmarks(req, res));
+// Get projects by owner phone (Public/New endpoint)
+router.get("/by-owner-phone/:phone", (req, res) => ProjectController.getProjectsByOwnerPhone(req, res));
+
+// Get projects by owner ID (Public Portfolio)
+router.get("/public/owners/:ownerId/projects", (req, res) => ProjectController.getProjectsByOwnerId(req, res));
+
+
 module.exports = router;
 

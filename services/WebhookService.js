@@ -3,6 +3,7 @@
  * Dispatches tracking events to external systems (e.g., lead-filteration)
  */
 const axios = require('axios');
+const crypto = require('crypto');
 
 // Webhook configuration - can be moved to env or database later
 const WEBHOOK_CONFIG = {
@@ -38,6 +39,7 @@ const sendWebhook = async (eventType, payload) => {
 
     const webhookPayload = {
         eventType,
+        eventId: crypto.randomUUID(),
         timestamp: new Date().toISOString(),
         source: 'sales-website',
         data: payload

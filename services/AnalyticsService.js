@@ -121,7 +121,7 @@ class AnalyticsService {
     throw new Error("User required");
   }
 
-  let projects = [];
+   let projects = [];
 
   // =============================
   // ADMIN → All Projects
@@ -131,34 +131,17 @@ class AnalyticsService {
   }
 
   // =============================
-  // BUILDER → Created Projects
+  // BUILDER / AGENT → Owned Projects
   // =============================
-  else if (user.role === "builder") {
-    projects = await ProjectService.getProjectsByBuilder(user.id);
+  else if (user.role === "builder" || user.role === "agent") {
+    projects = await ProjectService.getProjectsByOwner(user.id);
   }
 
   // =============================
-  // AGENT → Created + Assigned
+  // No valid role
   // =============================
-  else if (user.role === "agent") {
-
-    // 1️⃣ Projects created by agent
-    const createdProjects = await ProjectService.getProjectsByBuilder(user.id);
-
-    // 2️⃣ Projects assigned via organization
-    const assignedProjects = await ProjectService.getProjectsForAgent(user.id);
-
-    // 3️⃣ Merge and remove duplicates safely
-    const projectMap = new Map();
-
-    [...createdProjects, ...assignedProjects].forEach(project => {
-      const id = project._id?.toString() || project.id;
-      if (id) {
-        projectMap.set(id, project);
-      }
-    });
-
-    projects = Array.from(projectMap.values());
+  else {
+    return [];
   }
 
   // =============================
