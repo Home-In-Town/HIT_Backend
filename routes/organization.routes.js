@@ -116,9 +116,18 @@ router.get("/", async (req, res) => {
     }
 
     const orgs = await Organization.find(query)
-      .populate("agents", "name email role")
-      .populate("projects", "projectName status")
-      .lean();
+    .populate("agents", "name email role")
+    .populate("projects", `
+      projectName 
+      projectStatus 
+      projectType 
+      location 
+      city 
+      slug 
+      status 
+      pricing.startingPrice
+    `)
+    .lean();
 
     const cleaned = orgs
       .filter(o => safeId(o._id))
@@ -193,15 +202,28 @@ router.post("/", async (req, res) => {
       createdBy: new mongoose.Types.ObjectId(user.id)
     });
 
-    res.status(201).json({
-      id: safeId(org._id),
-      name: org.name,
-      description: org.description,
-      agents: org.agents,
-      projects: org.projects,
-      createdBy: safeId(org.createdBy)
-    });
+    const createdOrg = await Organization.findById(org._id)
+      .populate("agents", "name email role")
+      .populate("projects", `
+        projectName 
+        projectStatus 
+        projectType 
+        location 
+        city 
+        slug 
+        status 
+        pricing.startingPrice
+      `)
+      .lean();
 
+    res.status(201).json({
+      id: safeId(createdOrg._id),
+      name: createdOrg.name,
+      description: createdOrg.description,
+      agents: createdOrg.agents || [],
+      projects: createdOrg.projects || [],
+      createdBy: safeId(createdOrg.createdBy)
+    });
   } catch (err) {
     res.status(500).json({ error: err?.message || "Server error" });
   }
@@ -226,22 +248,40 @@ router.put("/:id", async (req, res) => {
     if (req.body.description) org.description = req.body.description.trim();
 
     if (Array.isArray(req.body.agents)) {
-      org.agents = req.body.agents.filter(Boolean);
+      org.agents = req.body.agents
+        .filter(Boolean)
+        .map(id => new mongoose.Types.ObjectId(id));
     }
 
     if (Array.isArray(req.body.projects)) {
-      org.projects = req.body.projects.filter(Boolean);
+      org.projects = req.body.projects
+        .filter(Boolean)
+        .map(id => new mongoose.Types.ObjectId(id));
     }
 
     await org.save();
 
+    const updatedOrg = await Organization.findById(org._id)
+      .populate("agents", "name email role")
+      .populate("projects", `
+        projectName 
+        projectStatus 
+        projectType 
+        location 
+        city 
+        slug 
+        status 
+        pricing.startingPrice
+      `)
+      .lean();
+
     res.json({
-      id: safeId(org._id),
-      name: org.name,
-      description: org.description,
-      agents: org.agents,
-      projects: org.projects,
-      createdBy: safeId(org.createdBy)
+      id: safeId(updatedOrg._id),
+      name: updatedOrg.name,
+      description: updatedOrg.description,
+      agents: updatedOrg.agents || [],
+      projects: updatedOrg.projects || [],
+      createdBy: safeId(updatedOrg.createdBy)
     });
 
   } catch (err) {

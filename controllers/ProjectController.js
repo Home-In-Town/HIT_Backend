@@ -202,6 +202,26 @@ class ProjectController {
       res.status(500).json({ message: error.message });
     }
   }
+
+  // Save landmarks
+  async saveLandmarks(req, res) {
+    try {
+      const { projectId } = req.params;
+      const { landmarks } = req.body;
+
+      if (!Array.isArray(landmarks)) {
+        return res.status(400).json({ message: 'landmarks must be an array' });
+      }
+      console.log("LANDMARKS RECEIVED:", req.body.landmarks);
+console.log("TYPE:", typeof req.body.landmarks);
+console.log("IS ARRAY:", Array.isArray(req.body.landmarks));
+      const saved = await ProjectService.saveProjectLandmarks(projectId, landmarks);
+      res.status(200).json({ landmarks: saved });
+    } catch (error) {
+      console.error('Error saving landmarks:', error);
+      res.status(500).json({ message: error.message });
+    }
+  }
 }
 
 module.exports = new ProjectController();

@@ -32,5 +32,8 @@ router.delete("/:projectId", (req, res) => ProjectController.delete(req, res));
 
 // Publish project
 router.post("/:projectId/publish", (req, res) => ProjectController.publish(req, res));
+
+// Save landmarks
+router.put("/:projectId/landmarks", (req, res) => ProjectController.saveLandmarks(req, res));
 module.exports = router;
 

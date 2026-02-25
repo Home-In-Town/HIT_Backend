@@ -37,7 +37,16 @@ const projectSchema = new mongoose.Schema({
   },
 
   amenities: [String],
-
+  landmarks: [
+    {
+      name: String,
+      type: String, 
+      lat: Number,
+      lng: Number,
+      address: String,
+      placeId: String
+    }
+  ],
   media: {
     coverImage: String,
     galleryImages: [String],
