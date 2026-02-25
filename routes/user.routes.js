@@ -2,9 +2,43 @@ const express = require("express");
 const router = express.Router();
 const User = require("../models/User");
 const { mockAuthMiddleware, requireRole } = require("../middleware/mockAuth");
+const jwt = require('jsonwebtoken');
 
 // Apply mock auth
 router.use(mockAuthMiddleware);
+
+/**
+ * GET /api/users/sso/token
+ * Generates a short-lived SSO token for the current user
+ */
+router.get("/sso/token", async (req, res) => {
+    try {
+        if (!req.user) {
+            return res.status(401).json({ error: "Not authenticated" });
+        }
+
+        // Fetch user from DB to get the phone number (req.user only has partial data from mockAuth)
+        const user = await User.findById(req.user.id);
+        if (!user) {
+            return res.status(404).json({ error: "User not found" });
+        }
+
+        const payload = {
+            id: user._id.toString(),
+            name: user.name,
+            role: user.role,
+            phone: user.phone,
+            companyName: user.companyName
+        };
+
+        const secret = process.env.INTERNAL_API_SECRET || 'hit-internal-secret-2024';
+        const token = jwt.sign(payload, secret, { expiresIn: '2m' });
+
+        res.json({ token });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
 
 /**
  * GET /api/users/me
