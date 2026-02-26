@@ -20,7 +20,6 @@ const projectSchema = new mongoose.Schema({
   reraApproved: { type: Boolean, default: false },
   reraNumber: String,
   projectStatus: { type: String, default: 'pre-launch' },
-
   pricing: {
     startingPrice: Number,
     pricePerSqFt: Number,
@@ -28,7 +27,6 @@ const projectSchema = new mongoose.Schema({
     paymentPlan: String,
     bankLoanAvailable: { type: Boolean, default: false }
   },
-
   configuration: {
     bhkOptions: [String],
     carpetAreaRange: String,
@@ -39,20 +37,27 @@ const projectSchema = new mongoose.Schema({
   },
 
   amenities: [String],
-
+  landmarks: [
+    {
+      name: String,
+      type: String, 
+      lat: Number,
+      lng: Number,
+      address: String,
+      placeId: String
+    }
+  ],
   media: {
     coverImage: String,
     galleryImages: [String],
     videos: [String],
     brochurePdf: String
   },
-
   cta: {
     buttonText: { type: String, default: 'Book Site Visit' },
     whatsappNumber: String,
     callNumber: String
   },
-
   slug: { type: String, unique: true, sparse: true },
   status: { type: String, default: 'draft' }
 }, {

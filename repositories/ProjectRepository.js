@@ -63,7 +63,6 @@ class ProjectRepository {
     const CtaClick = require('../models/CtaClick');
     await Visit.deleteMany({ projectId: id });
     await CtaClick.deleteMany({ projectId: id });
-
     return true;
   }
 
@@ -83,6 +82,15 @@ class ProjectRepository {
   async getPublished() {
     const projects = await Project.find({ status: 'published' }).lean();
     return projects.map(mapProject);
+  }
+  // Save or update landmarks for a project
+  async saveLandmarks(projectId, landmarks) {
+    const project = await Project.findByIdAndUpdate(
+      projectId,
+      { landmarks, updatedAt: new Date() },
+      { new: true }
+    ).lean();
+    return project ? project.landmarks : [];
   }
 }
 

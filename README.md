@@ -9,7 +9,6 @@ This is the backend service for the Sales Website application. It handles projec
 - **Public API**: Serve project data to public-facing pages.
 - **Analytics Tracking**: Track visitor interactions including page views, time spent, and CTA clicks (WhatsApp/Call).
 
-
 ## 🛠️ Tech Stack
 
 - **Runtime**: Node.js
@@ -38,7 +37,6 @@ This is the backend service for the Sales Website application. It handles projec
    ```env
    PORT=5001
    MONGODB_URI=your_mongodb_connection_string
-
    ```
 
 ## 🏃‍♂️ Running the Server
@@ -89,7 +87,6 @@ The server runs on `http://localhost:5001` by default.
 | :--- | :--- | :--- |
 | `GET` | `/overview` | Get system-wide analytics overview |
 | `GET` | `/projects/:projectId` | Get aggregated analytics for a project |
-
 
 
 ## ⚙️ Configuration

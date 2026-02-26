@@ -45,6 +45,10 @@ class ProjectService {
   async getPublicProjects() {
     return await ProjectRepository.getPublished();
   }
+
+  async saveProjectLandmarks(projectId, landmarks) {
+    return await ProjectRepository.saveLandmarks(projectId, landmarks);
+  }
 }
 
 module.exports = new ProjectService();
