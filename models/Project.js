@@ -40,7 +40,7 @@ const projectSchema = new mongoose.Schema({
   landmarks: [
     {
       name: String,
-      type: String, 
+      type: { type: String },
       lat: Number,
       lng: Number,
       address: String,

@@ -223,18 +223,28 @@ class ProjectController {
   async saveLandmarks(req, res) {
     try {
       const { projectId } = req.params;
-      const { landmarks } = req.body;
+      let { landmarks } = req.body;
+
+      // Parse if accidentally sent as a JSON string
+      if (typeof landmarks === 'string') {
+        try { landmarks = JSON.parse(landmarks); } catch { landmarks = []; }
+      }
 
       if (!Array.isArray(landmarks)) {
         return res.status(400).json({ message: 'landmarks must be an array' });
       }
-      console.log("LANDMARKS RECEIVED:", req.body.landmarks);
-console.log("TYPE:", typeof req.body.landmarks);
-console.log("IS ARRAY:", Array.isArray(req.body.landmarks));
+
+      // Sanitize: each item must be a plain object, not a stringified one
+      landmarks = landmarks.map((item) => {
+        if (typeof item === 'string') {
+          try { return JSON.parse(item); } catch { return null; }
+        }
+        return item;
+      }).filter(Boolean);
+
       const saved = await ProjectService.saveProjectLandmarks(projectId, landmarks);
       res.status(200).json({ landmarks: saved });
     } catch (error) {
-      console.error('Error saving landmarks:', error);
       res.status(500).json({ message: error.message });
     }
   }
