@@ -1,27 +1,16 @@
 const express = require("express");
 const router = express.Router();
 const User = require("../models/User");
-const { mockAuthMiddleware, requireRole } = require("../middleware/mockAuth");
+const { protect, restrictTo } = require("../middleware/auth");
 const jwt = require('jsonwebtoken');
-
-// Apply mock auth
-router.use(mockAuthMiddleware);
 
 /**
  * GET /api/users/sso/token
  * Generates a short-lived SSO token for the current user
  */
-router.get("/sso/token", async (req, res) => {
+router.get("/sso/token", protect, async (req, res) => {
     try {
-        if (!req.user) {
-            return res.status(401).json({ error: "Not authenticated" });
-        }
-
-        // Fetch user from DB to get the phone number (req.user only has partial data from mockAuth)
-        const user = await User.findById(req.user.id);
-        if (!user) {
-            return res.status(404).json({ error: "User not found" });
-        }
+        const user = req.user; // Already fetched by protect
 
         const payload = {
             id: user._id.toString(),
@@ -42,13 +31,10 @@ router.get("/sso/token", async (req, res) => {
 
 /**
  * GET /api/users/me
- * Get current user info (based on x-mock-user-id header)
+ * Get current user info
  */
-router.get("/me", async (req, res) => {
+router.get("/me", protect, async (req, res) => {
     try {
-        if (!req.user) {
-            return res.status(401).json({ error: "Not authenticated" });
-        }
         res.json(req.user);
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -59,13 +45,13 @@ router.get("/me", async (req, res) => {
  * GET /api/users
  * Admin only: List all users
  */
-router.get("/", requireRole("admin"), async (req, res) => {
+router.get("/", protect, restrictTo('admin'), async (req, res) => {
     try {
         const { role } = req.query;
         const filter = role ? { role } : {};
 
         const users = await User.find(filter)
-            .select("-__v")
+            .select("-__v -mpin")
             .lean();
 
         const mapped = users.map(u => ({
@@ -148,7 +134,7 @@ router.post("/login-by-name", async (req, res) => {
 
 /**
  * GET /api/users/by-role/:role
- * Public: Get list of users by role (for login dropdown)
+ * Public: Get list of users by role (for login dropdown - DEPRECATED in new auth but kept for compat)
  */
 router.get("/by-role/:role", async (req, res) => {
     try {
@@ -170,6 +156,35 @@ router.get("/by-role/:role", async (req, res) => {
         }));
 
         res.json(mapped);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * PUT /api/users/:id/role
+ * Admin only: Assign/Update user role
+ */
+router.put("/:id/role", async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { role } = req.body;
+
+        if (!['admin', 'builder', 'agent', 'unassigned'].includes(role)) {
+            return res.status(400).json({ error: "Invalid role" });
+        }
+
+        const user = await User.findByIdAndUpdate(
+            id,
+            { role },
+            { new: true }
+        ).select("-mpin -__v");
+
+        if (!user) {
+            return res.status(404).json({ error: "User not found" });
+        }
+
+        res.json(user);
     } catch (error) {
         res.status(500).json({ error: error.message });
     }

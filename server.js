@@ -11,15 +11,26 @@ const organizationRoutes = require("./routes/organization.routes");
 const userRoutes = require("./routes/user.routes");
 const { initWebhookCron } = require("./services/WebhookCron");
 
+const cookieParser = require('cookie-parser');
+const authRoutes = require("./routes/auth.routes");
+
 const checkEnv = require("./utils/checkEnv");
 
 // Validate environment before anything else
 checkEnv();
 
 const app = express();
-app.use(cors());
+
+// Allow credentials for JWT Cookies
+app.use(cors({
+  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+  credentials: true
+}));
+
+app.use(cookieParser());
 app.use(express.json());
 
+app.use("/api/auth", authRoutes);
 app.use("/api/projects", projectRoutes);
 app.use("/api/public", publicRoutes);
 app.use("/api/track", trackingRoutes);
