@@ -2,16 +2,23 @@ const mongoose = require('mongoose');
 
 const userSchema = new mongoose.Schema({
     name: { type: String, required: true },
-    email: { type: String, required: true, unique: true },
+    email: { type: String }, // Optional
+    phone: {
+        type: String,
+        required: true,
+        unique: true,
+        index: true
+    },
+    mpin: { type: String }, // Hashed
     role: {
         type: String,
-        enum: ['admin', 'builder', 'agent'],
+        enum: ['admin', 'builder', 'agent', 'unassigned'],
         required: true,
-        default: 'agent'
+        default: 'unassigned'
     },
-    companyName: { type: String }, // Optional: Used by Builders
-    phone: { type: String },
+    isVerified: { type: Boolean, default: false },
     isActive: { type: Boolean, default: true },
+    companyName: { type: String }, // Optional: Used by Builders
     oldId: { type: String }, // For backward compatibility with legacy IDs
     builderCode: { type: String } // Alternative ID for builder portfolio links
 }, {
