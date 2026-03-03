@@ -12,6 +12,9 @@ const organizationRoutes = require("./routes/organization.routes");
 const userRoutes = require("./routes/user.routes");
 const { initWebhookCron } = require("./services/WebhookCron");
 
+const cookieParser = require('cookie-parser');
+const authRoutes = require("./routes/auth.routes");
+
 const checkEnv = require("./utils/checkEnv");
 
 // Validate environment before anything else
@@ -19,15 +22,25 @@ checkEnv();
 
 const app = express();
 app.use(cors());
+
+// Other routes
+
+// Allow credentials for JWT Cookies
+app.use(cors({
+  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+  credentials: true
+}));
+
 //  FIRST → upload route (NO JSON PARSER)
 app.use("/api/upload", uploadRoutes);
 
+app.use(cookieParser());
 //  THEN → JSON parser
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ limit: "10mb", extended: true }));
 
 
-// Other routes
+app.use("/api/auth", authRoutes);
 app.use("/api/projects", projectRoutes);
 app.use("/api/public", publicRoutes);
 app.use("/api/track", trackingRoutes);
