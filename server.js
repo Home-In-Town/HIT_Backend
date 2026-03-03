@@ -21,7 +21,6 @@ const checkEnv = require("./utils/checkEnv");
 checkEnv();
 
 const app = express();
-app.use(cors());
 
 // Other routes
 
