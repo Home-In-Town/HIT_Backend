@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const ProjectController = require("../controllers/ProjectController");
 const { mockAuthMiddleware } = require("../middleware/mockAuth");
+const upload = require("../middleware/uploadBrochure");
 
 // Apply mock auth to all project routes
 router.use(mockAuthMiddleware);
