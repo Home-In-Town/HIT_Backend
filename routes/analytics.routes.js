@@ -1,11 +1,11 @@
 const express = require("express");
 const router = express.Router();
 const AnalyticsController = require("../controllers/AnalyticsController");
-const { mockAuthMiddleware } = require('../middleware/mockAuth');
+const { protect } = require('../middleware/auth');
 
 router.get(
   "/overview",
-  mockAuthMiddleware,   
+  protect,
   (req, res) => AnalyticsController.getOverview(req, res)
 );
 router.get("/projects/:projectId", (req, res) => AnalyticsController.getProjectStats(req, res));

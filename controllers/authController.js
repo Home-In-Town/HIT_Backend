@@ -4,11 +4,19 @@ const jwt = require('jsonwebtoken');
 const twilioService = require('../services/twilio.service');
 
 // Constants
-const COOKIE_OPTIONS = {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax', // Use 'none' for cross-domain if needed
-    maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+// Constants - Updated for cross-domain support (localhost -> Cloud Run)
+const getCookieOptions = (req) => {
+    const isProd = process.env.NODE_ENV === 'production';
+    const origin = req.get('origin');
+    const isCrossDomain = origin && !origin.includes(req.get('host'));
+
+    return {
+        httpOnly: true,
+        // Must be secure and SameSite=none for cross-domain cookies to work (e.g. localhost -> Cloud Run)
+        secure: isProd || isCrossDomain,
+        sameSite: (isProd || isCrossDomain) ? 'none' : 'lax',
+        maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+    };
 };
 
 /**
@@ -114,7 +122,7 @@ exports.verifyOtp = async (req, res) => {
         );
 
         // Set Cookie
-        res.cookie('token', token, COOKIE_OPTIONS);
+        res.cookie('token', token, getCookieOptions(req));
 
         res.json({
             message: 'Verification successful',
@@ -164,7 +172,7 @@ exports.login = async (req, res) => {
         );
 
         // Set Cookie
-        res.cookie('token', token, COOKIE_OPTIONS);
+        res.cookie('token', token, getCookieOptions(req));
 
         res.json({
             message: 'Login successful',
@@ -241,6 +249,6 @@ exports.getMe = async (req, res) => {
  * Logout - Clear Cookie.
  */
 exports.logout = (req, res) => {
-    res.clearCookie('token');
+    res.clearCookie('token', getCookieOptions(req));
     res.json({ message: 'Logged out successfully' });
 };
