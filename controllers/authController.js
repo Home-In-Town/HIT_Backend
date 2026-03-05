@@ -1,7 +1,7 @@
 const User = require('../models/User');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const twilioService = require('../services/twilio.service');
+const msg91Service = require('../services/msg91.service');
 
 // Constants
 // Constants - Updated for cross-domain support (localhost -> Cloud Run)
@@ -80,8 +80,8 @@ exports.register = async (req, res) => {
 
         await user.save();
 
-        // Send Twilio Verification
-        await twilioService.sendVerification(phone);
+        // Send MSG91 Verification
+        await msg91Service.sendVerification(phone);
 
         res.json({ message: 'Verification OTP sent' });
     } catch (error) {
@@ -100,8 +100,8 @@ exports.verifyOtp = async (req, res) => {
             return res.status(400).json({ error: 'Phone and Code are required' });
         }
 
-        // Verify with Twilio
-        const isApproved = await twilioService.checkVerification(phone, code);
+        // Verify with MSG91
+        const isApproved = await msg91Service.checkVerification(phone, code);
         if (!isApproved) {
             return res.status(401).json({ error: 'Invalid or expired OTP' });
         }
@@ -196,7 +196,7 @@ exports.forgotMpin = async (req, res) => {
         const user = await User.findOne({ phone, isVerified: true });
         if (!user) return res.status(404).json({ error: 'User not found' });
 
-        await twilioService.sendVerification(phone);
+        await msg91Service.sendVerification(phone);
         res.json({ message: 'Verification OTP sent for MPIN reset' });
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -215,7 +215,7 @@ exports.resetMpin = async (req, res) => {
         }
 
         // Verify code
-        const isApproved = await twilioService.checkVerification(phone, code);
+        const isApproved = await msg91Service.checkVerification(phone, code);
         if (!isApproved) {
             return res.status(401).json({ error: 'Invalid or expired OTP' });
         }

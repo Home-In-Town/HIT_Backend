@@ -22,7 +22,6 @@
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^9.1.5",
     "multer": "^2.0.2",
-    "twilio": "^5.12.2",
     "uuid": "^13.0.0"
   }
 }
