@@ -1,5 +1,10 @@
 const mongoose = require('mongoose');
 
+const fileSchema = new mongoose.Schema({
+  url: String,
+  key: String,
+});
+
 const projectSchema = new mongoose.Schema({
   projectName: { type: String, required: true },
   projectType: { type: String, default: 'flat' },
@@ -47,11 +52,11 @@ const projectSchema = new mongoose.Schema({
       placeId: String
     }
   ],
-  media: {
-    coverImage: String,
-    galleryImages: [String],
-    videos: [String],
-    brochurePdf: String
+   media: {
+    coverImage: fileSchema,
+    galleryImages: [fileSchema],
+    videos: [fileSchema],
+    brochurePdf: fileSchema
   },
   cta: {
     buttonText: { type: String, default: 'Book Site Visit' },
