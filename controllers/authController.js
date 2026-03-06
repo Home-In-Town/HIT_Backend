@@ -1,14 +1,22 @@
 const User = require('../models/User');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const twilioService = require('../services/twilio.service');
+const msg91Service = require('../services/msg91.service');
 
 // Constants
-const COOKIE_OPTIONS = {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax', // Use 'none' for cross-domain if needed
-    maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+// Constants - Updated for cross-domain support (localhost -> Cloud Run)
+const getCookieOptions = (req) => {
+    const isProd = process.env.NODE_ENV === 'production';
+    const origin = req.get('origin');
+    const isCrossDomain = origin && !origin.includes(req.get('host'));
+
+    return {
+        httpOnly: true,
+        // Must be secure and SameSite=none for cross-domain cookies to work (e.g. localhost -> Cloud Run)
+        secure: isProd || isCrossDomain,
+        sameSite: (isProd || isCrossDomain) ? 'none' : 'lax',
+        maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+    };
 };
 
 /**
@@ -72,8 +80,8 @@ exports.register = async (req, res) => {
 
         await user.save();
 
-        // Send Twilio Verification
-        await twilioService.sendVerification(phone);
+        // Send MSG91 Verification
+        await msg91Service.sendVerification(phone);
 
         res.json({ message: 'Verification OTP sent' });
     } catch (error) {
@@ -92,8 +100,8 @@ exports.verifyOtp = async (req, res) => {
             return res.status(400).json({ error: 'Phone and Code are required' });
         }
 
-        // Verify with Twilio
-        const isApproved = await twilioService.checkVerification(phone, code);
+        // Verify with MSG91
+        const isApproved = await msg91Service.checkVerification(phone, code);
         if (!isApproved) {
             return res.status(401).json({ error: 'Invalid or expired OTP' });
         }
@@ -114,7 +122,7 @@ exports.verifyOtp = async (req, res) => {
         );
 
         // Set Cookie
-        res.cookie('token', token, COOKIE_OPTIONS);
+        res.cookie('token', token, getCookieOptions(req));
 
         res.json({
             message: 'Verification successful',
@@ -164,7 +172,7 @@ exports.login = async (req, res) => {
         );
 
         // Set Cookie
-        res.cookie('token', token, COOKIE_OPTIONS);
+        res.cookie('token', token, getCookieOptions(req));
 
         res.json({
             message: 'Login successful',
@@ -185,10 +193,18 @@ exports.login = async (req, res) => {
 exports.forgotMpin = async (req, res) => {
     try {
         const { phone } = req.body;
-        const user = await User.findOne({ phone, isVerified: true });
-        if (!user) return res.status(404).json({ error: 'User not found' });
+        console.log(`[Forgot MPIN Flow] Initiated. Receiving request for phone number: ${phone}`);
 
-        await twilioService.sendVerification(phone);
+        const user = await User.findOne({ phone, isVerified: true });
+        if (!user) {
+            console.log(`[Forgot MPIN Flow] User not found or not verified for phone: ${phone}`);
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        console.log(`[Forgot MPIN Flow] User found: ${user.name}. Initiating MSG91 Verification...`);
+        await msg91Service.sendVerification(phone);
+        console.log(`[Forgot MPIN Flow] Handled successfully. Sending success response to frontend.`);
+
         res.json({ message: 'Verification OTP sent for MPIN reset' });
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -207,7 +223,7 @@ exports.resetMpin = async (req, res) => {
         }
 
         // Verify code
-        const isApproved = await twilioService.checkVerification(phone, code);
+        const isApproved = await msg91Service.checkVerification(phone, code);
         if (!isApproved) {
             return res.status(401).json({ error: 'Invalid or expired OTP' });
         }
@@ -241,6 +257,6 @@ exports.getMe = async (req, res) => {
  * Logout - Clear Cookie.
  */
 exports.logout = (req, res) => {
-    res.clearCookie('token');
+    res.clearCookie('token', getCookieOptions(req));
     res.json({ message: 'Logged out successfully' });
 };

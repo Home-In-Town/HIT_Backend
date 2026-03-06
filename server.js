@@ -25,8 +25,23 @@ const app = express();
 // Other routes
 
 // Allow credentials for JWT Cookies
+const ALLOWED_ORIGINS = [
+  'https://www.homeintown.in',
+  'https://homeintown.in',
+  'http://localhost:3000',
+  'http://localhost:3001',
+  ...(process.env.FRONTEND_URL ? process.env.FRONTEND_URL.split(',').map(o => o.trim()) : []),
+];
+
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+  origin: (origin, callback) => {
+    // Allow server-to-server requests (no origin) and whitelisted origins
+    if (!origin || ALLOWED_ORIGINS.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error(`CORS blocked: origin '${origin}' not allowed`));
+    }
+  },
   credentials: true
 }));
 
