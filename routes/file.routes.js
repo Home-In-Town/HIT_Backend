@@ -1,5 +1,6 @@
 const express = require("express");
 const crypto = require("crypto");
+const multer = require("multer");
 const { PutObjectCommand } = require("@aws-sdk/client-s3");
 const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
 const { DeleteObjectCommand } = require("@aws-sdk/client-s3");
@@ -9,13 +10,89 @@ const Project = require("../models/Project");
 
 const router = express.Router();
 
-// ================= GET SIGNED URL =================
+// Multer: keep files in memory (max 50MB)
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 50 * 1024 * 1024 },
+});
+
+// ================= PROXY UPLOAD (NO CORS ISSUE) =================
+router.post("/proxy-upload", upload.single("file"), async (req, res) => {
+  try {
+    const file = req.file;
+    const projectId = req.body?.projectId;
+    const type = req.body?.type;
+
+    if (!file || !projectId || !type) {
+      return res.status(400).json({
+        error: "Missing file, projectId, or type",
+        received: { hasFile: !!file, projectId, type }
+      });
+    }
+
+    const allowedTypes = [
+      "image/jpeg", "image/png", "image/webp",
+      "video/mp4", "video/webm",
+      "application/pdf"
+    ];
+
+    if (!allowedTypes.includes(file.mimetype)) {
+      return res.status(400).json({ error: "Invalid file type" });
+    }
+
+    // Check project exists
+    const project = await Project.findById(projectId);
+    if (!project) return res.status(404).json({ error: "Project not found" });
+
+    const safeName = file.originalname.replace(/\s+/g, "-");
+    const uniqueId = crypto.randomUUID();
+    const fileKey = `projects/${projectId}/${type}/${uniqueId}-${safeName}`;
+
+    const bucketName = process.env.R2_BUCKET_NAME;
+    console.log(`📤 Proxy upload: bucket="${bucketName}", key="${fileKey}", size=${file.size}`);
+
+    // Upload to R2 server-side (no CORS needed)
+    await r2.send(new PutObjectCommand({
+      Bucket: bucketName,
+      Key: fileKey,
+      Body: file.buffer,
+      ContentType: file.mimetype,
+    }));
+
+    const fileUrl = `${process.env.R2_PUBLIC_URL}/${fileKey}`;
+
+    // Save to DB
+    const fileData = { url: fileUrl, key: fileKey };
+    let update = {};
+
+    if (type === "cover") {
+      update = { $set: { "media.coverImage": fileData } };
+    } else if (type === "gallery") {
+      update = { $push: { "media.galleryImages": fileData } };
+    } else if (type === "video") {
+      update = { $push: { "media.videos": fileData } };
+    } else if (type === "brochure") {
+      update = { $set: { "media.brochurePdf": fileData } };
+    } else {
+      return res.status(400).json({ error: "Invalid type" });
+    }
+
+    await Project.findByIdAndUpdate(projectId, update);
+
+    console.log(`✅ Proxy upload success: ${fileKey}`);
+    res.json({ fileUrl, fileKey });
+
+  } catch (err) {
+    console.error("❌ Proxy upload error:", err.Code || err.message, err);
+    res.status(500).json({ error: "Upload failed", detail: err.Code || err.message });
+  }
+});
+
+// ================= GET SIGNED URL (kept as fallback) =================
 router.post("/get-upload-url", async (req, res) => {
-  // example
   const project = await Project.findById(req.body.projectId);
   if (!project) return res.status(404).json({ error: "Not found" });
 
-// optional: check user ownership
   try {
     const { fileName, fileType, projectId, type } = req.body;
 
@@ -48,9 +125,13 @@ router.post("/get-upload-url", async (req, res) => {
 
     const uploadUrl = await getSignedUrl(r2, command, {
       expiresIn: 300,
+      unhoistableHeaders: new Set([
+        "x-amz-sdk-checksum-algorithm",
+        "x-amz-checksum-crc32"
+      ]),
+      signableHeaders: new Set(["content-type"])
     });
 
-console.log("Generated Upload URL:", uploadUrl);
     const fileUrl = `${process.env.R2_PUBLIC_URL}/${fileKey}`;
 
     res.json({ uploadUrl, fileKey, fileUrl });

@@ -1,6 +1,6 @@
-import { S3Client } from "@aws-sdk/client-s3";
+const { S3Client } = require("@aws-sdk/client-s3");
 
-export const r2 = new S3Client({
+const r2 = new S3Client({
   region: "auto",
   endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
   credentials: {
@@ -8,4 +8,8 @@ export const r2 = new S3Client({
     secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
   },
   forcePathStyle: true, // VERY IMPORTANT
+  requestChecksumCalculation: "WHEN_REQUIRED",
+  responseChecksumValidation: "WHEN_REQUIRED",
 });
+
+module.exports = { r2 };
