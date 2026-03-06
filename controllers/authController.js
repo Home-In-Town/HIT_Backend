@@ -193,10 +193,18 @@ exports.login = async (req, res) => {
 exports.forgotMpin = async (req, res) => {
     try {
         const { phone } = req.body;
-        const user = await User.findOne({ phone, isVerified: true });
-        if (!user) return res.status(404).json({ error: 'User not found' });
+        console.log(`[Forgot MPIN Flow] Initiated. Receiving request for phone number: ${phone}`);
 
+        const user = await User.findOne({ phone, isVerified: true });
+        if (!user) {
+            console.log(`[Forgot MPIN Flow] User not found or not verified for phone: ${phone}`);
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        console.log(`[Forgot MPIN Flow] User found: ${user.name}. Initiating MSG91 Verification...`);
         await msg91Service.sendVerification(phone);
+        console.log(`[Forgot MPIN Flow] Handled successfully. Sending success response to frontend.`);
+
         res.json({ message: 'Verification OTP sent for MPIN reset' });
     } catch (error) {
         res.status(500).json({ error: error.message });

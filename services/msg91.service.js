@@ -28,6 +28,8 @@ class Msg91Service {
         try {
             // MSG91 recommends passing the mobile number without the '+' symbol
             const cleanPhone = phone.replace('+', '');
+            console.log(`[MSG91 Service] Preparing to send OTP via MSG91 to clean phone number: ${cleanPhone}`);
+            console.log(`[MSG91 Service] Template ID: ${this.templateId}`);
 
             const response = await axios.get(this.baseUrl, {
                 params: {
@@ -39,6 +41,7 @@ class Msg91Service {
                 }
             });
 
+            console.log(`[MSG91 Service] Successfully dispatched request to MSG91! Response:`, response.data);
             return response.data;
         } catch (error) {
             console.error('MSG91 Send Error:', error.response?.data || error.message);
