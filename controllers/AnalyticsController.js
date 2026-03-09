@@ -37,21 +37,32 @@ class AnalyticsController {
     }
   }
 
- async getOverview(req, res) {
-  try {
-    if (!req.user) {
-      return res.status(401).json({ message: "Authentication required" });
+  async getOverview(req, res) {
+    try {
+      if (!req.user) {
+        return res.status(401).json({ message: "Authentication required" });
+      }
+
+      const stats = await AnalyticsService.getOverviewByUser(req.user);
+      res.json(stats);
+
+    } catch (error) {
+      res.status(500).json({ message: error.message });
     }
-
-    const stats = await AnalyticsService.getOverviewByUser(req.user);
-    res.json(stats);
-
-  } catch (error) {
-    res.status(500).json({ message: error.message });
   }
-}
 
+  async getGlobalOverview(req, res) {
+    try {
+      if (!req.user || req.user.role !== 'admin') {
+        return res.status(403).json({ message: "Forbidden: Admin access required" });
+      }
 
+      const stats = await AnalyticsService.getGlobalStats();
+      res.json(stats);
+    } catch (error) {
+      res.status(500).json({ message: error.message });
+    }
+  }
 
   async trackFormSubmit(req, res) {
     try {

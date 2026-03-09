@@ -12,7 +12,7 @@ const userSchema = new mongoose.Schema({
     mpin: { type: String }, // Hashed
     role: {
         type: String,
-        enum: ['admin', 'builder', 'agent', 'unassigned'],
+        enum: ['admin', 'builder', 'agent', 'unassigned', 'user'],
         required: true,
         default: 'unassigned'
     },

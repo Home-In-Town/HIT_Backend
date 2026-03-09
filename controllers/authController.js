@@ -19,25 +19,7 @@ const getCookieOptions = (req) => {
     };
 };
 
-/**
- * Check if the user exists for the given phone number.
- */
-exports.checkPhone = async (req, res) => {
-    try {
-        const { phone } = req.body;
-        if (!phone) return res.status(400).json({ error: 'Phone number is required' });
 
-        const user = await User.findOne({ phone, isVerified: true });
-
-        if (user) {
-            return res.json({ exists: true, name: user.name });
-        } else {
-            return res.json({ exists: false });
-        }
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-};
 
 /**
  * Initial Registration - Creates a pending user and sends OTP.
@@ -139,6 +121,7 @@ exports.verifyOtp = async (req, res) => {
 
 /**
  * Sign-In using Phone + MPIN only.
+ * Security: Uses generic error messages to prevent account enumeration.
  */
 exports.login = async (req, res) => {
     try {
@@ -148,15 +131,18 @@ exports.login = async (req, res) => {
             return res.status(400).json({ error: 'Phone and MPIN are required' });
         }
 
+        // Generic error message for all failure cases (prevents account enumeration)
+        const GENERIC_ERROR = 'Invalid phone or MPIN';
+
         const user = await User.findOne({ phone, isVerified: true });
         if (!user) {
-            return res.status(404).json({ error: 'User not found or not verified' });
+            return res.status(401).json({ error: GENERIC_ERROR });
         }
 
         // Check MPIN
         const isMatch = await bcrypt.compare(mpin.toString(), user.mpin);
         if (!isMatch) {
-            return res.status(401).json({ error: 'Invalid MPIN' });
+            return res.status(401).json({ error: GENERIC_ERROR });
         }
 
         // Check if user is active

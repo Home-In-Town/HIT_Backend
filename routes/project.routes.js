@@ -1,10 +1,10 @@
 const express = require("express");
 const router = express.Router();
 const ProjectController = require("../controllers/ProjectController");
-const { mockAuthMiddleware } = require("../middleware/mockAuth");
+const { protect } = require("../middleware/auth");
 
-// Apply mock auth to all project routes
-router.use(mockAuthMiddleware);
+// Apply production auth to all project routes
+router.use(protect);
 
 // List all projects (filtered by role)
 router.get("/", (req, res) => ProjectController.getAll(req, res));

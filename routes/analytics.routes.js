@@ -8,6 +8,12 @@ router.get(
   protect,
   (req, res) => AnalyticsController.getOverview(req, res)
 );
+
+router.get(
+  "/global-overview",
+  protect,
+  (req, res) => AnalyticsController.getGlobalOverview(req, res)
+);
 router.get("/projects/:projectId", (req, res) => AnalyticsController.getProjectStats(req, res));
 
 module.exports = router;

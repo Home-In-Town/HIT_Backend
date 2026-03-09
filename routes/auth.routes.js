@@ -8,10 +8,7 @@ const { protect } = require('../middleware/auth');
  * Public Routes
  */
 
-// Step 1: Check if number is registered or new
-router.post('/check-phone', authController.checkPhone);
-
-// Step 2 (New User): Start Registration (Trigger OTP)
+// Registration (Trigger OTP)
 router.post('/register', authController.register);
 
 // Step 2/3 (New User / Reset): Verify OTP and Log In

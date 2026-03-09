@@ -2,9 +2,9 @@ const express = require("express");
 const router = express.Router();
 const Organization = require("../models/Organization");
 const mongoose = require("mongoose");
-const { mockAuthMiddleware } = require("../middleware/mockAuth");
+const { protect } = require("../middleware/auth");
 
-router.use(mockAuthMiddleware);
+router.use(protect);
 // ---------------------------------------
 // SAFE ID
 // ---------------------------------------
@@ -116,8 +116,8 @@ router.get("/", async (req, res) => {
     }
 
     const orgs = await Organization.find(query)
-    .populate("agents", "name email role")
-    .populate("projects", `
+      .populate("agents", "name email role")
+      .populate("projects", `
       projectName 
       projectStatus 
       projectType 
@@ -127,7 +127,7 @@ router.get("/", async (req, res) => {
       status 
       pricing.startingPrice
     `)
-    .lean();
+      .lean();
 
     const cleaned = orgs
       .filter(o => safeId(o._id))
