@@ -69,13 +69,22 @@ app.use("/api/files", fileRoutes);
 
 const PORT = process.env.PORT || 5001;
 
-// Start server immediately (Cloud Run needs port open fast)
-app.listen(PORT, () => {
-  console.log(`🚀 Backend running on http://localhost:${PORT}`);
-});
+const startServer = async () => {
+  try {
+    // Connect to MongoDB first
+    await connectDB();
 
-// Connect to MongoDB in the background
-connectDB().then(() => {
-  // Initialize services that depend on DB
-  initWebhookCron();
-});
+    // Initialize services that depend on DB
+    initWebhookCron();
+
+    // Start listening
+    app.listen(PORT, () => {
+      console.log(`🚀 Secured Backend running on http://localhost:${PORT}`);
+    });
+  } catch (err) {
+    console.error('❌ Failed to start server:', err);
+    process.exit(1);
+  }
+};
+
+startServer();
