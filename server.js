@@ -1,5 +1,6 @@
 require('dotenv').config();
 const express = require("express");
+const helmet = require('helmet');
 const cors = require("cors");
 const connectDB = require("./config/db");
 
@@ -32,6 +33,8 @@ const ALLOWED_ORIGINS = [
   'http://localhost:3001',
   ...(process.env.FRONTEND_URL ? process.env.FRONTEND_URL.split(',').map(o => o.trim()) : []),
 ];
+
+app.use(helmet());
 
 app.use(cors({
   origin: (origin, callback) => {
