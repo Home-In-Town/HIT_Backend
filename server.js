@@ -17,6 +17,7 @@ const authRoutes = require("./routes/auth.routes");
 
 const checkEnv = require("./utils/checkEnv");
 const fileRoutes = require("./routes/file.routes");
+const { generalLimiter } = require('./middleware/rateLimiter');
 
 // Validate environment before anything else
 checkEnv();
@@ -35,6 +36,7 @@ const ALLOWED_ORIGINS = [
 ];
 
 app.use(helmet());
+app.use(generalLimiter);
 
 app.use(cors({
   origin: (origin, callback) => {
