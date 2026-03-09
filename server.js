@@ -67,6 +67,9 @@ app.use("/api/internal", require("./routes/internalRoutes"));
 
 app.use("/api/files", fileRoutes);
 
+// Global Error Handler (Must be last)
+app.use(require('./middleware/errorHandler'));
+
 const PORT = process.env.PORT || 5001;
 
 const startServer = async () => {
