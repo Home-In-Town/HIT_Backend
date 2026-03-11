@@ -70,4 +70,46 @@ router.post('/verify-user', async (req, res) => {
     }
 });
 
+/**
+ * GET /api/internal/projects-by-phone/:phone
+ * Returns projects owned by a user with the given phone number.
+ * Used by lead-filteration backend for Google/FB integration pages.
+ */
+router.get('/projects-by-phone/:phone', async (req, res) => {
+    try {
+        const { phone } = req.params;
+        const Project = require('../models/Project');
+
+        console.log(`🔒 Internal Projects Request: Phone=${phone}`);
+
+        const user = await User.findOne({
+            phone: phone,
+            role: { $in: ['builder', 'agent', 'admin'] }
+        });
+
+        if (!user) {
+            return res.status(404).json({ message: 'User not found with this phone number' });
+        }
+
+        const projects = await Project.find({
+            owner: user._id,
+            status: { $ne: 'deleted' }
+        })
+            .select('projectName slug _id coverImage city')
+            .sort('createdAt');
+
+        res.status(200).json({
+            builder: {
+                name: user.name,
+                id: user._id
+            },
+            projects
+        });
+
+    } catch (error) {
+        console.error('❌ Internal Projects API Error:', error);
+        res.status(500).json({ message: error.message });
+    }
+});
+
 module.exports = router;

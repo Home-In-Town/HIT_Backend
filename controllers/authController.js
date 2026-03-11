@@ -98,7 +98,7 @@ exports.verifyOtp = async (req, res) => {
 
         // Generate Token
         const token = jwt.sign(
-            { id: user._id, name: user.name, role: user.role },
+            { id: user._id, name: user.name, role: user.role, phone: user.phone },
             process.env.JWT_SECRET,
             { expiresIn: '7d' }
         );
@@ -152,7 +152,7 @@ exports.login = async (req, res) => {
 
         // Generate Token
         const token = jwt.sign(
-            { id: user._id, name: user.name, role: user.role },
+            { id: user._id, name: user.name, role: user.role, phone: user.phone },
             process.env.JWT_SECRET,
             { expiresIn: '7d' }
         );
