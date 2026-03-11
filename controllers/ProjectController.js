@@ -123,7 +123,7 @@ class ProjectController {
         status: { $ne: 'deleted' }
       })
         .select('projectName slug _id coverImage city')
-        .sort('-createdAt');
+        .sort('createdAt');
 
       res.status(200).json({
         builder: {
@@ -177,7 +177,7 @@ class ProjectController {
         status: { $ne: 'deleted' }
       })
         .select('projectName slug _id coverImage city startingPrice')
-        .sort('-createdAt');
+        .sort('createdAt');
 
       res.status(200).json({
         builder: {

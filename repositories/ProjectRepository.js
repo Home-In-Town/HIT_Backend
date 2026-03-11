@@ -46,9 +46,28 @@ class ProjectRepository {
   }
 
   async update(id, updates) {
+    // Helper to flatten nested objects for partial updates ($set)
+    const flatten = (obj, prefix = '') => {
+      let result = {};
+      for (const key in obj) {
+        const val = obj[key];
+        const newKey = prefix ? `${prefix}.${key}` : key;
+
+        // Don't flatten arrays or special MongoDB types
+        if (val && typeof val === 'object' && !Array.isArray(val) && !(val instanceof Date)) {
+          Object.assign(result, flatten(val, newKey));
+        } else {
+          result[newKey] = val;
+        }
+      }
+      return result;
+    };
+
+    const flattenedUpdates = flatten(updates);
+
     const project = await Project.findByIdAndUpdate(
       id,
-      { ...updates, updatedAt: new Date() },
+      { $set: { ...flattenedUpdates, updatedAt: new Date() } },
       { new: true }
     ).lean();
     return mapProject(project);

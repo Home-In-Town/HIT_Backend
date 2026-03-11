@@ -1,5 +1,6 @@
 require('dotenv').config();
 const express = require("express");
+const helmet = require('helmet');
 const cors = require("cors");
 const connectDB = require("./config/db");
 
@@ -16,6 +17,7 @@ const authRoutes = require("./routes/auth.routes");
 
 const checkEnv = require("./utils/checkEnv");
 const fileRoutes = require("./routes/file.routes");
+const { generalLimiter } = require('./middleware/rateLimiter');
 
 // Validate environment before anything else
 checkEnv();
@@ -32,6 +34,9 @@ const ALLOWED_ORIGINS = [
   'http://localhost:3001',
   ...(process.env.FRONTEND_URL ? process.env.FRONTEND_URL.split(',').map(o => o.trim()) : []),
 ];
+
+app.use(helmet());
+app.use(generalLimiter);
 
 app.use(cors({
   origin: (origin, callback) => {
@@ -62,15 +67,27 @@ app.use("/api/internal", require("./routes/internalRoutes"));
 
 app.use("/api/files", fileRoutes);
 
+// Global Error Handler (Must be last)
+app.use(require('./middleware/errorHandler'));
+
 const PORT = process.env.PORT || 5001;
 
-// Start server immediately (Cloud Run needs port open fast)
-app.listen(PORT, () => {
-  console.log(`🚀 Backend running on http://localhost:${PORT}`);
-});
+const startServer = async () => {
+  try {
+    // Connect to MongoDB first
+    await connectDB();
 
-// Connect to MongoDB in the background
-connectDB().then(() => {
-  // Initialize services that depend on DB
-  initWebhookCron();
-});
+    // Initialize services that depend on DB
+    initWebhookCron();
+
+    // Start listening
+    app.listen(PORT, () => {
+      console.log(`🚀 Secured Backend running on http://localhost:${PORT}`);
+    });
+  } catch (err) {
+    console.error('❌ Failed to start server:', err);
+    process.exit(1);
+  }
+};
+
+startServer();
