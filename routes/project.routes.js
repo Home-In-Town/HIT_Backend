@@ -3,7 +3,19 @@ const router = express.Router();
 const ProjectController = require("../controllers/ProjectController");
 const { protect } = require("../middleware/auth");
 
-// Apply production auth to all project routes
+// --- PUBLIC ROUTES (No Auth Required) ---
+
+// Verify User by Phone
+router.get("/verify-user/:phone", (req, res) => ProjectController.verifyUserByPhone(req, res));
+
+// Get projects by owner phone
+router.get("/by-owner-phone/:phone", (req, res) => ProjectController.getProjectsByOwnerPhone(req, res));
+
+// Get projects by owner ID (Public Portfolio)
+router.get("/public/owners/:ownerId/projects", (req, res) => ProjectController.getProjectsByOwnerId(req, res));
+
+
+// --- PROTECTED ROUTES (Auth Required) ---
 router.use(protect);
 
 // List all projects (filtered by role)
@@ -11,9 +23,6 @@ router.get("/", (req, res) => ProjectController.getAll(req, res));
 
 // Create a new project
 router.post("/", (req, res) => ProjectController.create(req, res));
-
-// Verify User by Phone (Public/New endpoint)
-router.get("/verify-user/:phone", (req, res) => ProjectController.verifyUserByPhone(req, res));
 
 // Get specific project
 router.get("/:projectId", (req, res) => ProjectController.getOne(req, res));
@@ -29,12 +38,6 @@ router.post("/:projectId/publish", (req, res) => ProjectController.publish(req, 
 
 // Save landmarks
 router.put("/:projectId/landmarks", (req, res) => ProjectController.saveLandmarks(req, res));
-// Get projects by owner phone (Public/New endpoint)
-router.get("/by-owner-phone/:phone", (req, res) => ProjectController.getProjectsByOwnerPhone(req, res));
-
-// Get projects by owner ID (Public Portfolio)
-router.get("/public/owners/:ownerId/projects", (req, res) => ProjectController.getProjectsByOwnerId(req, res));
-
 
 module.exports = router;
 

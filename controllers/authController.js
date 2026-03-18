@@ -2,20 +2,30 @@ const User = require('../models/User');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const msg91Service = require('../services/msg91.service');
+const Logger = require('../utils/logger');
+const { catchAsync, AppError } = require('../middleware/errorHandler');
 
-// Constants
+const logger = new Logger('AuthController');
+
 // Constants - Updated for cross-domain support (localhost -> Cloud Run)
 const getCookieOptions = (req) => {
     const isProd = process.env.NODE_ENV === 'production';
     const origin = req.get('origin');
+    
+    // Check if it's localhost development
+    const isLocalhost = origin && (origin.includes('localhost') || origin.includes('127.0.0.1'));
+    
+    // Cross-domain logic for production/external testing
     const isCrossDomain = origin && !origin.includes(req.get('host'));
+
+    // Bypassing 'secure' for localhost as browsers block 'secure' cookies on HTTP
+    const useSecure = isProd || (isCrossDomain && !isLocalhost);
 
     return {
         httpOnly: true,
-        // Must be secure and SameSite=none for cross-domain cookies to work (e.g. localhost -> Cloud Run)
-        secure: isProd || isCrossDomain,
-        sameSite: (isProd || isCrossDomain) ? 'none' : 'lax',
-        maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+        secure: useSecure,
+        sameSite: useSecure ? 'none' : 'lax',
+        maxAge: 3 * 24 * 60 * 60 * 1000 // 3 days
     };
 };
 
@@ -24,225 +34,258 @@ const getCookieOptions = (req) => {
 /**
  * Initial Registration - Creates a pending user and sends OTP.
  */
-exports.register = async (req, res) => {
-    try {
-        const { name, phone, mpin, email } = req.body;
+exports.register = catchAsync(async (req, res) => {
+    const { name, phone, mpin, email, role } = req.body;
 
-        if (!name || !phone || !mpin) {
-            return res.status(400).json({ error: 'Name, Phone, and MPIN are required' });
-        }
+    logger.info('Registration initiated', { phone, role });
 
-        // Check if user already exists
-        let user = await User.findOne({ phone });
+    // Sanitize input
+    const sanitizedName = name.trim();
+    const sanitizedEmail = email?.trim() || '';
 
-        // If user exists and is already verified, trigger login logic elsewhere
-        if (user && user.isVerified) {
-            return res.status(400).json({ error: 'User already exists. Please login.' });
-        }
+    // Check if user already exists
+    let user = await User.findOne({ phone });
 
-        // Hash the MPIN
-        const hashedMpin = await bcrypt.hash(mpin.toString(), 12);
-
-        if (!user) {
-            // Create new pending user
-            user = new User({
-                name,
-                phone,
-                mpin: hashedMpin,
-                email: email || '',
-                isVerified: false,
-                role: 'unassigned'
-            });
-        } else {
-            // Update the unverified user with new details
-            user.name = name;
-            user.mpin = hashedMpin;
-            user.email = email || '';
-        }
-
-        await user.save();
-
-        // Send MSG91 Verification
-        await msg91Service.sendVerification(phone);
-
-        res.json({ message: 'Verification OTP sent' });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
+    // If user exists and is already verified, trigger login logic elsewhere
+    if (user && user.isVerified) {
+        logger.warn('Duplicate registration attempt', { phone });
+        throw new AppError('User already exists. Please login.', 400);
     }
-};
+
+    // Hash the MPIN
+    const hashedMpin = await bcrypt.hash(mpin.toString(), 12);
+
+    if (!user) {
+        // Create new pending user
+        user = new User({
+            name: sanitizedName,
+            phone,
+            mpin: hashedMpin,
+            email: sanitizedEmail,
+            isVerified: false,
+            role: role === 'employee' ? 'unassigned' : (role || 'user')
+        });
+    } else {
+        // Update the unverified user with new details
+        user.name = sanitizedName;
+        user.mpin = hashedMpin;
+        user.email = sanitizedEmail;
+        user.role = role === 'employee' ? 'unassigned' : (role || user.role || 'user');
+    }
+
+    await user.save();
+
+    // Send MSG91 Verification
+    await msg91Service.sendVerification(phone);
+    logger.info('OTP sent successfully', { phone });
+
+    res.json({ message: 'Verification OTP sent to your phone' });
+});
 
 /**
  * Verify Registration/Reset OTP and log the user in.
  */
-exports.verifyOtp = async (req, res) => {
-    try {
-        const { phone, code, type } = req.body; // type could be 'register' or 'reset'
+exports.verifyOtp = catchAsync(async (req, res) => {
+    const { phone, code } = req.body;
 
-        if (!phone || !code) {
-            return res.status(400).json({ error: 'Phone and Code are required' });
-        }
+    logger.info('OTP verification initiated', { phone });
 
-        // Verify with MSG91
-        const isApproved = await msg91Service.checkVerification(phone, code);
-        if (!isApproved) {
-            return res.status(401).json({ error: 'Invalid or expired OTP' });
-        }
-
-        // Fetch user
-        const user = await User.findOne({ phone });
-        if (!user) return res.status(404).json({ error: 'User not found' });
-
-        // Update user
-        user.isVerified = true;
-        await user.save();
-
-        // Generate Token
-        const token = jwt.sign(
-            { id: user._id, name: user.name, role: user.role, phone: user.phone },
-            process.env.JWT_SECRET,
-            { expiresIn: '7d' }
-        );
-
-        // Set Cookie
-        res.cookie('token', token, getCookieOptions(req));
-
-        res.json({
-            message: 'Verification successful',
-            user: {
-                id: user._id,
-                name: user.name,
-                role: user.role
-            }
-        });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
+    // Verify with MSG91
+    const isApproved = await msg91Service.checkVerification(phone, code);
+    if (!isApproved) {
+        logger.warn('Invalid OTP attempt', { phone });
+        throw new AppError('Invalid or expired OTP', 401);
     }
-};
+
+    // Fetch user
+    const user = await User.findOne({ phone });
+    if (!user) {
+        logger.warn('User not found for OTP verification', { phone });
+        throw new AppError('User not found', 404);
+    }
+
+    // Update user
+    user.isVerified = true;
+    await user.save();
+
+    // Generate Token
+    const token = jwt.sign(
+        { id: user._id, name: user.name, role: user.role, phone: user.phone },
+        process.env.JWT_SECRET,
+        { expiresIn: '3d' }
+    );
+
+    // Set Cookie
+    res.cookie('token', token, getCookieOptions(req));
+    logger.info('User verified successfully', { userId: user._id, phone });
+
+    res.json({
+        message: 'Verification successful',
+        user: {
+            id: user._id,
+            name: user.name,
+            role: user.role
+        }
+    });
+});
 
 /**
  * Sign-In using Phone + MPIN only.
  * Security: Uses generic error messages to prevent account enumeration.
  */
-exports.login = async (req, res) => {
-    try {
-        const { phone, mpin } = req.body;
+exports.login = catchAsync(async (req, res) => {
+    const { phone, mpin } = req.body;
 
-        if (!phone || !mpin) {
-            return res.status(400).json({ error: 'Phone and MPIN are required' });
-        }
+    logger.info('Login attempt', { phone });
 
-        // Generic error message for all failure cases (prevents account enumeration)
-        const GENERIC_ERROR = 'Invalid phone or MPIN';
+    // Generic error message for all failure cases (prevents account enumeration)
+    const GENERIC_ERROR = 'Invalid phone or MPIN';
 
-        const user = await User.findOne({ phone, isVerified: true });
-        if (!user) {
-            return res.status(401).json({ error: GENERIC_ERROR });
-        }
-
-        // Check MPIN
-        const isMatch = await bcrypt.compare(mpin.toString(), user.mpin);
-        if (!isMatch) {
-            return res.status(401).json({ error: GENERIC_ERROR });
-        }
-
-        // Check if user is active
-        if (!user.isActive) {
-            return res.status(403).json({ error: 'Account is deactivated' });
-        }
-
-        // Generate Token
-        const token = jwt.sign(
-            { id: user._id, name: user.name, role: user.role, phone: user.phone },
-            process.env.JWT_SECRET,
-            { expiresIn: '7d' }
-        );
-
-        // Set Cookie
-        res.cookie('token', token, getCookieOptions(req));
-
-        res.json({
-            message: 'Login successful',
-            user: {
-                id: user._id,
-                name: user.name,
-                role: user.role
-            }
-        });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
+    const user = await User.findOne({ phone, isVerified: true });
+    if (!user) {
+        logger.warn('Login failed: user not found or unverified', { phone });
+        throw new AppError(GENERIC_ERROR, 401);
     }
-};
+
+    // Check MPIN
+    const isMatch = await bcrypt.compare(mpin.toString(), user.mpin);
+    if (!isMatch) {
+        logger.warn('Login failed: invalid MPIN', { userId: user._id });
+        throw new AppError(GENERIC_ERROR, 401);
+    }
+
+    // Check if user is active
+    if (!user.isActive) {
+        logger.warn('Login failed: account deactivated', { userId: user._id });
+        throw new AppError('Account is deactivated', 403);
+    }
+
+    // Generate Token
+    const token = jwt.sign(
+        { id: user._id, name: user.name, role: user.role, phone: user.phone },
+        process.env.JWT_SECRET,
+        { expiresIn: '3d' }
+    );
+
+    // Set Cookie
+    res.cookie('token', token, getCookieOptions(req));
+    logger.info('User logged in successfully', { userId: user._id, phone });
+
+    res.json({
+        message: 'Login successful',
+        user: {
+            id: user._id,
+            name: user.name,
+            role: user.role
+        }
+    });
+});
 
 /**
  * Forgot MPIN - Send Verification OTP.
  */
-exports.forgotMpin = async (req, res) => {
-    try {
-        const { phone } = req.body;
-        console.log(`[Forgot MPIN Flow] Initiated. Receiving request for phone number: ${phone}`);
+exports.forgotMpin = catchAsync(async (req, res) => {
+    const { phone } = req.body;
+    logger.info('Forgot MPIN initiated', { phone });
 
-        const user = await User.findOne({ phone, isVerified: true });
-        if (!user) {
-            console.log(`[Forgot MPIN Flow] User not found or not verified for phone: ${phone}`);
-            return res.status(404).json({ error: 'User not found' });
-        }
-
-        console.log(`[Forgot MPIN Flow] User found: ${user.name}. Initiating MSG91 Verification...`);
-        await msg91Service.sendVerification(phone);
-        console.log(`[Forgot MPIN Flow] Handled successfully. Sending success response to frontend.`);
-
-        res.json({ message: 'Verification OTP sent for MPIN reset' });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
+    const user = await User.findOne({ phone, isVerified: true });
+    if (!user) {
+        logger.warn('Forgot MPIN: user not found', { phone });
+        throw new AppError('User not found', 404);
     }
-};
+
+    await msg91Service.sendVerification(phone);
+    logger.info('MPIN reset OTP sent', { userId: user._id });
+
+    res.json({ message: 'Verification OTP sent for MPIN reset' });
+});
 
 /**
  * Reset MPIN - After OTP Verification.
  */
-exports.resetMpin = async (req, res) => {
-    try {
-        const { phone, code, newMpin } = req.body;
+exports.resetMpin = catchAsync(async (req, res) => {
+    const { phone, code, newMpin } = req.body;
+    logger.info('MPIN reset initiated', { phone });
 
-        if (!phone || !code || !newMpin) {
-            return res.status(400).json({ error: 'Phone, Code, and New MPIN are required' });
-        }
-
-        // Verify code
-        const isApproved = await msg91Service.checkVerification(phone, code);
-        if (!isApproved) {
-            return res.status(401).json({ error: 'Invalid or expired OTP' });
-        }
-
-        const user = await User.findOne({ phone });
-        if (!user) return res.status(404).json({ error: 'User not found' });
-
-        // Update MPIN
-        user.mpin = await bcrypt.hash(newMpin.toString(), 12);
-        await user.save();
-
-        res.json({ message: 'MPIN reset successful. Please login.' });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
+    // Verify code
+    const isApproved = await msg91Service.checkVerification(phone, code);
+    if (!isApproved) {
+        logger.warn('MPIN reset: invalid OTP', { phone });
+        throw new AppError('Invalid or expired OTP', 401);
     }
-};
+
+    const user = await User.findOne({ phone });
+    if (!user) {
+        logger.warn('MPIN reset: user not found', { phone });
+        throw new AppError('User not found', 404);
+    }
+
+    // Update MPIN
+    user.mpin = await bcrypt.hash(newMpin.toString(), 12);
+    await user.save();
+    logger.info('MPIN reset successfully', { userId: user._id });
+
+    res.json({ message: 'MPIN reset successful. Please login.' });
+});
 
 /**
- * Get current user info (for session persistence).
+ * Get current user profile.
+ * Authenticated via 'protect' middleware.
  */
-exports.getMe = async (req, res) => {
-    try {
-        // req.user is set by the protect middleware
-        res.json(req.user);
-    } catch (error) {
-        res.status(500).json({ error: error.message });
+exports.getMe = catchAsync(async (req, res) => {
+    res.json({
+        user: req.user
+    });
+});
+
+/**
+ * Get current session info (SILENT version for initial check).
+ * Does NOT return 401 if unauthenticated.
+ */
+exports.getSession = catchAsync(async (req, res) => {
+    const token = req.cookies.token;
+    if (!token) {
+        return res.json({ authenticated: false, user: null });
     }
-};
+
+    try {
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        const user = await User.findById(decoded.id)
+            .select('-mpin')
+            .populate('employerId', 'name phone role');
+
+        if (!user || !user.isActive) {
+            return res.json({ authenticated: false, user: null });
+        }
+
+        res.json({ 
+            authenticated: true, 
+            user: {
+                id: user._id,
+                name: user.name,
+                role: user.role,
+                phone: user.phone,
+                email: user.email,
+                employerId: user.employerId ? {
+                    id: user.employerId._id,
+                    name: user.employerId.name,
+                    role: user.employerId.role
+                } : null,
+                isEmployerConfirmed: user.isEmployerConfirmed
+            }
+        });
+    } catch (error) {
+        // Log error silently internal to server, but send success status to frontend
+        console.log('[Silent Session Check] Unauthenticated or Expired Token');
+        res.json({ authenticated: false, user: null });
+    }
+});
 
 /**
  * Logout - Clear Cookie.
  */
 exports.logout = (req, res) => {
     res.clearCookie('token', getCookieOptions(req));
+    logger.info('User logged out', { userId: req.user?.id });
     res.json({ message: 'Logged out successfully' });
 };

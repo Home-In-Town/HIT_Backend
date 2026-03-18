@@ -4,31 +4,58 @@ const authController = require('../controllers/authController');
 
 const { protect } = require('../middleware/auth');
 const { authLimiter } = require('../middleware/rateLimiter');
+const { validate, authValidationSchemas } = require('../middleware/authValidation');
 
 /**
  * Public Routes
  */
 
-// Registration (Trigger OTP)
-router.post('/register', authLimiter, authController.register);
+// Register with validation
+router.post(
+  '/register',
+  authLimiter,
+  validate(authValidationSchemas.register),
+  authController.register
+);
 
-// Step 2/3 (New User / Reset): Verify OTP and Log In
-router.post('/verify-otp', authLimiter, authController.verifyOtp);
+// Verify OTP with validation
+router.post(
+  '/verify-otp',
+  authLimiter,
+  validate(authValidationSchemas.verifyOtp),
+  authController.verifyOtp
+);
 
-// Step 2 (Existing User): Log In with MPIN
-router.post('/login', authLimiter, authController.login);
+// Login with validation
+router.post(
+  '/login',
+  authLimiter,
+  validate(authValidationSchemas.login),
+  authController.login
+);
 
-// Forgot MPIN
-router.post('/forgot-mpin', authController.forgotMpin);
+// Forgot MPIN with validation
+router.post(
+  '/forgot-mpin',
+  authLimiter,
+  validate(authValidationSchemas.forgotMpin),
+  authController.forgotMpin
+);
 
-// Reset MPIN via OTP
-router.post('/reset-mpin', authLimiter, authController.resetMpin);
+// Reset MPIN with validation
+router.post(
+  '/reset-mpin',
+  authLimiter,
+  validate(authValidationSchemas.resetMpin),
+  authController.resetMpin
+);
 
 /**
  * Authenticated Routes
  */
 
 router.get('/me', protect, authController.getMe);
+router.get('/session', authController.getSession);
 
 /**
  * Common Routes

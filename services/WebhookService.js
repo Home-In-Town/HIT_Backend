@@ -33,7 +33,6 @@ const generateSignature = (payload, secret) => {
  */
 const sendWebhook = async (eventType, payload) => {
     if (!WEBHOOK_CONFIG.enabled) {
-        console.log('📡 Webhook disabled, skipping:', eventType);
         return { success: true, skipped: true };
     }
 
@@ -50,10 +49,6 @@ const sendWebhook = async (eventType, payload) => {
     let lastError = null;
     for (let attempt = 1; attempt <= WEBHOOK_CONFIG.retries; attempt++) {
         try {
-            console.log(`📡 Sending webhook (attempt ${attempt}): ${eventType}`);
-            console.log(`   URL: ${WEBHOOK_CONFIG.url}`);
-            console.log(`   Payload:`, JSON.stringify(webhookPayload, null, 2));
-
             const response = await axios.post(WEBHOOK_CONFIG.url, webhookPayload, {
                 headers: {
                     'Content-Type': 'application/json',
@@ -63,7 +58,6 @@ const sendWebhook = async (eventType, payload) => {
                 timeout: WEBHOOK_CONFIG.timeout
             });
 
-            console.log(`✅ Webhook sent successfully: ${eventType}`);
             return {
                 success: true,
                 status: response.status,

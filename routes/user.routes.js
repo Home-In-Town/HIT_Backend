@@ -70,67 +70,7 @@ router.get("/", protect, restrictTo('admin'), async (req, res) => {
     }
 });
 
-/**
- * GET /api/users/mock-accounts
- * Public: Get list of available mock accounts for role switcher
- */
-router.get("/mock-accounts", async (req, res) => {
-    try {
-        const users = await User.find({ isActive: true })
-            .select("_id name email role")
-            .lean();
 
-        const mapped = users.map(u => ({
-            id: u._id.toString(),
-            name: u.name,
-            email: u.email,
-            role: u.role
-        }));
-
-        res.json(mapped);
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-/**
- * POST /api/users/login-by-name
- * Public: Find user by name and role (case-insensitive)
- * Used for mock login flow
- */
-router.post("/login-by-name", async (req, res) => {
-    try {
-        const { name, role, phone } = req.body;
-
-        if (!name || !role || !phone) {
-            return res.status(400).json({ error: "Name, role, and phone are required" });
-        }
-
-        // Case-insensitive search for name
-        const user = await User.findOne({
-            name: { $regex: new RegExp(`^${name.trim()}$`, 'i') },
-            phone: phone.trim(),
-            role: role,
-            isActive: true
-        }).lean();
-
-        if (!user) {
-            return res.status(404).json({
-                error: "Authentication failed",
-                hint: `No active user found matching name "${name}", role "${role}", and phone "${phone}".`
-            });
-        }
-
-        res.json({
-            id: user._id.toString(),
-            name: user.name,
-            email: user.email,
-            role: user.role
-        });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
 
 /**
  * GET /api/users/by-role/:role

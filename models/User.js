@@ -12,10 +12,12 @@ const userSchema = new mongoose.Schema({
     mpin: { type: String }, // Hashed
     role: {
         type: String,
-        enum: ['admin', 'builder', 'agent', 'unassigned', 'user'],
+        enum: ['admin', 'builder', 'agent', 'unassigned', 'user', 'employee'],
         required: true,
         default: 'unassigned'
     },
+    employerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    isEmployerConfirmed: { type: Boolean, default: false },
     isVerified: { type: Boolean, default: false },
     isActive: { type: Boolean, default: true },
     companyName: { type: String }, // Optional: Used by Builders
