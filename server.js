@@ -1,5 +1,7 @@
 require('dotenv').config();
 const express = require('express');
+const http = require('http');
+const { Server } = require('socket.io');
 const helmet = require('helmet');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
@@ -24,6 +26,10 @@ const authRoutes = require('./routes/auth.routes');
 const contactRoutes = require('./routes/contact.routes');
 const fileRoutes = require('./routes/file.routes');
 const internalRoutes = require('./routes/internalRoutes');
+const chatRoutes = require('./routes/chat.routes');
+const crmRoutes = require('./routes/crm.routes');
+const marketplaceRoutes = require('./routes/marketplace.routes');
+const notificationRoutes = require('./routes/notification.routes');
 
 // Import services
 const { initWebhookCron } = require('./services/WebhookCron');
@@ -112,6 +118,10 @@ app.use('/api/employee', employeeRoutes);
 app.use('/api/contacts', contactRoutes);
 app.use('/api/files', fileRoutes);
 app.use('/api/internal', internalRoutes);
+app.use('/api/chat', chatRoutes);
+app.use('/api/crm', crmRoutes);
+app.use('/api/marketplace', marketplaceRoutes);
+app.use('/api/notifications', notificationRoutes);
 
 // 404 handler
 app.use((req, res) => {
@@ -140,10 +150,30 @@ const startServer = async () => {
       });
     }
 
+    // Create HTTP server and attach Socket.io
+    const server = http.createServer(app);
+    const io = new Server(server, {
+      cors: {
+        origin: ALLOWED_ORIGINS,
+        credentials: true,
+        methods: ['GET', 'POST']
+      },
+      pingTimeout: 60000,
+      pingInterval: 25000
+    });
+
+    // Store io instance on app for use in controllers
+    app.set('io', io);
+
+    // Initialize chat socket handlers
+    require('./sockets/chat.socket')(io);
+    logger.info('Socket.io chat engine initialized');
+
     // Start listening
-    const server = app.listen(PORT, () => {
+    server.listen(PORT, () => {
       logger.info(`Server running on http://localhost:${PORT}`);
       logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
+      logger.info('WebSocket server ready for connections');
     });
 
     // Handle graceful shutdown

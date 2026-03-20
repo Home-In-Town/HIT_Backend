@@ -87,6 +87,7 @@ const sendWebhook = async (eventType, payload) => {
 const sendPageViewEvent = async (data) => {
     return sendWebhook('page_view', {
         leadId: data.leadId,
+        automationId: data.automationId,
         projectId: data.projectId,
         projectSlug: data.projectSlug,
         visitId: data.visitId,
@@ -101,6 +102,7 @@ const sendPageViewEvent = async (data) => {
 const sendCtaClickEvent = async (data) => {
     return sendWebhook('cta_click', {
         leadId: data.leadId,
+        automationId: data.automationId,
         projectId: data.projectId,
         ctaType: data.ctaType, // 'call', 'whatsapp', 'form'
         clickId: data.clickId
@@ -113,6 +115,7 @@ const sendCtaClickEvent = async (data) => {
 const sendTimeUpdateEvent = async (data) => {
     return sendWebhook('time_update', {
         leadId: data.leadId,
+        automationId: data.automationId,
         projectId: data.projectId,
         visitId: data.visitId,
         duration: data.duration
@@ -125,6 +128,7 @@ const sendTimeUpdateEvent = async (data) => {
 const sendFormSubmitEvent = async (data) => {
     return sendWebhook('form_submit', {
         leadId: data.leadId,
+        automationId: data.automationId,
         projectId: data.projectId,
         formData: data.formData
     });

@@ -14,6 +14,7 @@ class AnalyticsService {
     if (data.leadId) {
       WebhookService.sendPageViewEvent({
         leadId: data.leadId,
+        automationId: data.automationId, // Pass automationId
         projectId: data.projectId,
         projectSlug: data.projectSlug,
         visitId: result?.id || result?._id?.toString(),
@@ -26,7 +27,7 @@ class AnalyticsService {
   }
 
   async trackTime(data) {
-    const { visitId, duration, projectId, leadId } = data;
+    const { visitId, duration, projectId, leadId, automationId } = data;
     if (visitId && duration) {
       const result = await AnalyticsRepository.updateVisitDuration(visitId, duration, projectId);
 
@@ -34,6 +35,7 @@ class AnalyticsService {
       if (leadId) {
         WebhookService.sendTimeUpdateEvent({
           leadId,
+          automationId, // Pass automationId
           projectId,
           visitId,
           duration
@@ -56,6 +58,7 @@ class AnalyticsService {
     if (data.leadId) {
       WebhookService.sendCtaClickEvent({
         leadId: data.leadId,
+        automationId: data.automationId, // Pass automationId
         projectId: data.projectId,
         ctaType: data.ctaType,
         clickId: result?.id || result?._id?.toString()
@@ -70,6 +73,7 @@ class AnalyticsService {
     if (data.leadId) {
       await WebhookService.sendFormSubmitEvent({
         leadId: data.leadId,
+        automationId: data.automationId, // Pass automationId
         projectId: data.projectId,
         formData: data.formData
       }).catch(err => console.error('Webhook error:', err.message));
