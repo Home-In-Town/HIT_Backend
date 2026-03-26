@@ -56,7 +56,8 @@ const projectSchema = new mongoose.Schema({
     coverImage: fileSchema,
     galleryImages: [fileSchema],
     videos: [fileSchema],
-    brochurePdf: fileSchema
+    brochurePdf: fileSchema,
+     layoutImage: fileSchema 
   },
   cta: {
     buttonText: { type: String, default: 'Book Site Visit' },
