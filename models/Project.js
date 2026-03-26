@@ -8,7 +8,6 @@ const fileSchema = new mongoose.Schema({
 const projectSchema = new mongoose.Schema({
   projectName: { type: String, required: true },
   projectType: { type: String, default: 'flat' },
-  builderName: String,
 
   // RBAC: Which builder/agent owns this project
   owner: {

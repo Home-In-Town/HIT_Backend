@@ -8,24 +8,28 @@ const Notification = require('../models/Notification');
  */
 exports.createListing = async (req, res) => {
   try {
-    const { project, listingType, commissionPercentage, description, expectedValue, tags } = req.body;
+    const { project, listingType, commissionType, commissionValue, description, expectedValue, tags } = req.body;
     const listedBy = req.user._id;
 
-    if (!project || !listingType || commissionPercentage === undefined) {
-      return res.status(400).json({ error: 'project, listingType, and commissionPercentage are required' });
+    if (!listingType || commissionValue === undefined) {
+      return res.status(400).json({ error: 'listingType and commissionValue are required' });
+    }
+    if (listingType === 'selling' && !project) {
+        return res.status(400).json({ error: 'project is required for selling' });
     }
 
     const listing = await MarketplaceListing.create({
       project,
       listedBy,
       listingType,
-      commissionPercentage,
+      commissionType: commissionType || 'percentage',
+      commissionValue,
       description: description || '',
       expectedValue: expectedValue || 0,
       tags: tags || []
     });
 
-    await listing.populate('project', 'projectName city location pricing');
+    await listing.populate({ path: 'project', select: 'projectName city location pricing', populate: { path: 'owner', select: 'name role companyName' } });
     await listing.populate('listedBy', 'name companyName role');
 
     res.status(201).json({ listing });
@@ -47,7 +51,7 @@ exports.getListings = async (req, res) => {
     if (listingType) filter.listingType = listingType;
 
     const listings = await MarketplaceListing.find(filter)
-      .populate('project', 'projectName city location pricing media configuration')
+      .populate({ path: 'project', select: 'projectName city location pricing media configuration slug', populate: { path: 'owner', select: 'name role companyName' } })
       .populate('listedBy', 'name companyName role')
       .sort({ createdAt: -1 })
       .skip((parseInt(page) - 1) * parseInt(limit))
@@ -69,7 +73,7 @@ exports.getListings = async (req, res) => {
 exports.getMyListings = async (req, res) => {
   try {
     const listings = await MarketplaceListing.find({ listedBy: req.user._id })
-      .populate('project', 'projectName city location pricing')
+      .populate({ path: 'project', select: 'projectName city location pricing media configuration slug', populate: { path: 'owner', select: 'name role companyName' } })
       .sort({ createdAt: -1 });
 
     res.status(200).json({ listings });
@@ -86,7 +90,7 @@ exports.getMyListings = async (req, res) => {
 exports.getListingById = async (req, res) => {
   try {
     const listing = await MarketplaceListing.findById(req.params.id)
-      .populate('project', 'projectName city location pricing media configuration amenities cta')
+      .populate({ path: 'project', select: 'projectName city location pricing media configuration amenities cta slug', populate: { path: 'owner', select: 'name role companyName' } })
       .populate('listedBy', 'name companyName role phone');
 
     if (!listing) {
@@ -119,7 +123,7 @@ exports.getListingById = async (req, res) => {
  */
 exports.updateListing = async (req, res) => {
   try {
-    const { status, commissionPercentage, description, expectedValue, tags } = req.body;
+    const { status, commissionType, commissionValue, description, expectedValue, tags } = req.body;
 
     const listing = await MarketplaceListing.findOne({
       _id: req.params.id,
@@ -131,7 +135,8 @@ exports.updateListing = async (req, res) => {
     }
 
     if (status) listing.status = status;
-    if (commissionPercentage !== undefined) listing.commissionPercentage = commissionPercentage;
+    if (commissionType) listing.commissionType = commissionType;
+    if (commissionValue !== undefined) listing.commissionValue = commissionValue;
     if (description !== undefined) listing.description = description;
     if (expectedValue !== undefined) listing.expectedValue = expectedValue;
     if (tags) listing.tags = tags;
@@ -164,7 +169,8 @@ exports.trackAction = async (req, res) => {
 
     // Build commission data
     let commission = {
-      percentage: listing.commissionPercentage,
+      type: listing.commissionType,
+      value: listing.commissionValue,
       baseValue: listing.expectedValue,
       earnedAmount: 0,
       status: 'pending'
@@ -172,7 +178,11 @@ exports.trackAction = async (req, res) => {
 
     // Calculate earned amount for deal_closed
     if (actionType === 'deal_closed') {
-      commission.earnedAmount = (listing.expectedValue * listing.commissionPercentage) / 100;
+      if (listing.commissionType === 'percentage') {
+        commission.earnedAmount = (listing.expectedValue * listing.commissionValue) / 100;
+      } else {
+        commission.earnedAmount = listing.commissionValue;
+      }
       commission.status = 'pending'; // Needs admin approval
 
       // Close the listing
@@ -246,6 +256,60 @@ exports.getCommissions = async (req, res) => {
     });
   } catch (err) {
     console.error('getCommissions error:', err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+/**
+ * GET /api/marketplace/admin/actions
+ * Admin only: Get all marketplace actions (claims, inquiries, deals) across all users
+ */
+exports.getAllActions = async (req, res) => {
+  try {
+    const actions = await MarketplaceAction.find({
+      actionType: { $in: ['claimed', 'deal_closed', 'inquired'] }
+    })
+      .populate({
+        path: 'listing',
+        populate: {
+          path: 'project',
+          select: 'projectName city location',
+          populate: { path: 'owner', select: 'name role companyName' }
+        }
+      })
+      .populate('actor', 'name email role companyName phone')
+      .sort({ createdAt: -1 });
+
+    res.status(200).json({ actions });
+  } catch (err) {
+    console.error('getAllActions error:', err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+/**
+ * PATCH /api/marketplace/admin/actions/:id/status
+ * Admin only: Approve/Reject/Mark Paid for a commission/referral
+ */
+exports.updateActionStatus = async (req, res) => {
+  try {
+    const { status } = req.body; // 'approved', 'paid', 'rejected', 'pending'
+    
+    if (!['approved', 'paid', 'rejected', 'pending'].includes(status)) {
+        return res.status(400).json({ error: 'Invalid status' });
+    }
+
+    const action = await MarketplaceAction.findById(req.params.id);
+    if (!action) return res.status(404).json({ error: 'Action not found' });
+
+    if (action.commission) {
+      action.commission.status = status;
+      await action.save();
+    }
+
+    res.status(200).json({ action });
+  } catch (err) {
+    console.error('updateActionStatus error:', err);
     res.status(500).json({ error: err.message });
   }
 };

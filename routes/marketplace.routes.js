@@ -20,4 +20,8 @@ router.post('/listings/:id/action', marketplaceController.trackAction);
 // Commissions
 router.get('/commissions', marketplaceController.getCommissions);
 
+// Admin only routes
+router.get('/admin/actions', restrictTo('admin'), marketplaceController.getAllActions);
+router.patch('/admin/actions/:id/status', restrictTo('admin'), marketplaceController.updateActionStatus);
+
 module.exports = router;

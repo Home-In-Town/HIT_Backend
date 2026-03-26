@@ -31,7 +31,8 @@ const marketplaceActionSchema = new mongoose.Schema({
   },
   // Commission calculation fields
   commission: {
-    percentage: { type: Number, default: 0 },
+    type: { type: String, enum: ['percentage', 'fixed'], default: 'percentage' },
+    value: { type: Number, default: 0 },
     baseValue: { type: Number, default: 0 },
     earnedAmount: { type: Number, default: 0 },
     status: {

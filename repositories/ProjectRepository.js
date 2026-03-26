@@ -13,12 +13,12 @@ function mapProject(project) {
 
 class ProjectRepository {
   async getAll() {
-    const projects = await Project.find().lean();
+    const projects = await Project.find().populate('owner', 'name role companyName').lean();
     return projects.map(mapProject);
   }
 
   async getById(id) {
-    const project = await Project.findById(id).lean();
+    const project = await Project.findById(id).populate('owner', 'name role companyName').lean();
     return mapProject(project);
   }
 
@@ -26,7 +26,7 @@ class ProjectRepository {
    * Get projects by owner ID (for builder/agent role)
    */
   async getByOwner(ownerId) {
-    const projects = await Project.find({ owner: ownerId }).lean();
+    const projects = await Project.find({ owner: ownerId }).populate('owner', 'name role companyName').lean();
     return projects.map(mapProject);
   }
 
@@ -35,7 +35,7 @@ class ProjectRepository {
    */
   async getByIds(projectIds) {
     if (!projectIds || projectIds.length === 0) return [];
-    const projects = await Project.find({ _id: { $in: projectIds } }).lean();
+    const projects = await Project.find({ _id: { $in: projectIds } }).populate('owner', 'name role companyName').lean();
     return projects.map(mapProject);
   }
 
@@ -99,7 +99,7 @@ class ProjectRepository {
     return mapProject(project);
   }
   async getPublished() {
-    const projects = await Project.find({ status: 'published' }).lean();
+    const projects = await Project.find({ status: 'published' }).populate('owner', 'name role companyName').lean();
     return projects.map(mapProject);
   }
   // Save or update landmarks for a project

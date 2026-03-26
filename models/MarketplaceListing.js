@@ -5,7 +5,7 @@ const marketplaceListingSchema = new mongoose.Schema({
   project: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Project',
-    required: true,
+    required: false,
     index: true
   },
   // Who listed this project
@@ -22,12 +22,16 @@ const marketplaceListingSchema = new mongoose.Schema({
     required: true,
     index: true
   },
-  // Commission percentage offered for referrals
-  commissionPercentage: {
+  // Commission details
+  commissionType: {
+    type: String,
+    enum: ['percentage', 'fixed'],
+    default: 'percentage'
+  },
+  commissionValue: {
     type: Number,
     required: true,
-    min: 0,
-    max: 100
+    min: 0
   },
   // Description / pitch for the listing
   description: {
