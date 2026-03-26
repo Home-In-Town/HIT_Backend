@@ -67,7 +67,9 @@ router.post("/proxy-upload", upload.single("file"), async (req, res) => {
 
     if (type === "cover") {
       update = { $set: { "media.coverImage": fileData } };
-    } else if (type === "gallery") {
+    }else if (type === "layout") {
+      update = { $set: { "media.layoutImage": fileData } };
+    }else if (type === "gallery") {
       update = { $push: { "media.galleryImages": fileData } };
     } else if (type === "video") {
       update = { $push: { "media.videos": fileData } };
@@ -161,7 +163,9 @@ router.post("/save-file", async (req, res) => {
     if (type === "gallery") {
       update = { $push: { "media.galleryImages": file } };
 
-    } else if (type === "video") {
+    }else if (type === "layout") {
+      update = { $set: { "media.layoutImage": file } };
+    }else if (type === "video") {
       update = { $push: { "media.videos": file } };
 
     } else if (type === "brochure") {
@@ -218,7 +222,9 @@ router.delete("/delete-file", async (req, res) => {
     } else if (type === "cover") {
       update = { $unset: { "media.coverImage": "" } };
 
-    } else {
+    }else if (type === "layout") {
+      update = { $unset: { "media.layoutImage": "" } };
+    }else {
       return res.status(400).json({ error: "Invalid type" });
     }
 
