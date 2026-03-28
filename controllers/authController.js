@@ -25,7 +25,7 @@ const getCookieOptions = (req) => {
         httpOnly: true,
         secure: useSecure,
         sameSite: useSecure ? 'none' : 'lax',
-        maxAge: 3 * 24 * 60 * 60 * 1000 // 3 days
+        maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
     };
 };
 
@@ -112,7 +112,7 @@ exports.verifyOtp = catchAsync(async (req, res) => {
     const token = jwt.sign(
         { id: user._id, name: user.name, role: user.role, phone: user.phone },
         process.env.JWT_SECRET,
-        { expiresIn: '3d' }
+        { expiresIn: '30d' }
     );
 
     // Set Cookie
@@ -164,7 +164,7 @@ exports.login = catchAsync(async (req, res) => {
     const token = jwt.sign(
         { id: user._id, name: user.name, role: user.role, phone: user.phone },
         process.env.JWT_SECRET,
-        { expiresIn: '3d' }
+        { expiresIn: '30d' }
     );
 
     // Set Cookie
