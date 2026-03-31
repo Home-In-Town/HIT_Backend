@@ -5,6 +5,8 @@ const { Server } = require('socket.io');
 const helmet = require('helmet');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
+const jwt = require('jsonwebtoken');
+
 
 const Logger = require('./utils/logger');
 const { connectDB, gracefulShutdown } = require('./config/db');
@@ -95,9 +97,29 @@ app.use(
   })
 );
 
-app.use(generalLimiter);
 app.use(cookieParser());
 app.use(express.json({ limit: '10mb' }));
+
+// ============ RATE LIMITING PRE-EXTRACTION ============
+// Extract JWT before rate limiter to enable User-ID based limiting
+app.use((req, res, next) => {
+  const token = req.cookies?.token || req.headers?.authorization?.split(' ')[1];
+  if (token) {
+    try {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      if (decoded && decoded.id) {
+        req.userId = decoded.id;
+      }
+    } catch (err) {
+      // Silently ignore JWT errors - rate limiter will fallback to IP-based limiting
+    }
+  }
+  next();
+});
+
+app.use(generalLimiter);
+
+
 
 // ============ ROUTES ============
 

@@ -61,6 +61,7 @@ router.get('/session', authController.getSession);
  * Common Routes
  */
 
-router.post('/logout', authController.logout);
+router.post('/logout', authLimiter, authController.logout);
+
 
 module.exports = router;
