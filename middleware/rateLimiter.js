@@ -1,4 +1,5 @@
 const rateLimit = require('express-rate-limit');
+const { ipKeyGenerator } = require('express-rate-limit');
 
 /**
  * Normalizes phone numbers by stripping all non-digit characters.
@@ -16,25 +17,25 @@ const normalizePhone = (phone) => {
  */
 const generalKeyGenerator = (req) => {
     if (req.userId) return `user_${req.userId}`;
-    
+
     const phone = normalizePhone(req.body?.phone);
     if (phone) return `auth_${phone}`;
-    
-    return req.ip;
+
+    return ipKeyGenerator(req);
 };
 
 /**
  * Auth Key Generator (Specifically for register/login/forgot-mpin)
- * Prioritizes Phone Number (Tier 2) to prevent an authenticated attacker 
+ * Prioritizes Phone Number (Tier 2) to prevent an authenticated attacker
  * from brute-forcing someone else's account.
  */
 const authKeyGenerator = (req) => {
     const phone = normalizePhone(req.body?.phone);
     if (phone) return `auth_${phone}`;
-    
+
     if (req.userId) return `user_${req.userId}`;
-    
-    return req.ip;
+
+    return ipKeyGenerator(req);
 };
 
 const generalLimiter = rateLimit({

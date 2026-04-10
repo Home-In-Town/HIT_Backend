@@ -2,32 +2,6 @@ const express = require("express");
 const router = express.Router();
 const User = require("../models/User");
 const { protect, restrictTo } = require("../middleware/auth");
-const jwt = require('jsonwebtoken');
-
-/**
- * GET /api/users/sso/token
- * Generates a short-lived SSO token for the current user
- */
-router.get("/sso/token", protect, async (req, res) => {
-    try {
-        const user = req.user; // Already fetched by protect
-
-        const payload = {
-            id: user._id.toString(),
-            name: user.name,
-            role: user.role,
-            phone: user.phone,
-            companyName: user.companyName
-        };
-
-        const secret = process.env.INTERNAL_API_SECRET || 'hit-internal-secret-2024';
-        const token = jwt.sign(payload, secret, { expiresIn: '2m' });
-
-        res.json({ token });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
 
 /**
  * GET /api/users/me
