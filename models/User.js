@@ -22,7 +22,16 @@ const userSchema = new mongoose.Schema({
     isActive: { type: Boolean, default: true },
     companyName: { type: String }, // Optional: Used by Builders
     oldId: { type: String }, // For backward compatibility with legacy IDs
-    builderCode: { type: String } // Alternative ID for builder portfolio links
+    builderCode: { type: String }, // Alternative ID for builder portfolio links
+
+    // CRM Integration fields
+    oneEmployeeLinked:  { type: Boolean, default: false },
+    oneEmployeeOwnerId: { type: String, sparse: true },
+    verificationStatus: {
+        builder: { type: String, enum: ['unverified', 'pending', 'verified'], default: 'unverified' },
+        agent:   { type: String, enum: ['unverified', 'pending', 'verified'], default: 'unverified' }
+    },
+    commissionHistory: { type: [mongoose.Schema.Types.Mixed], default: [] }
 }, {
     timestamps: true
 });
@@ -31,5 +40,16 @@ const userSchema = new mongoose.Schema({
 userSchema.index({ role: 1 });
 userSchema.index({ oldId: 1 });
 userSchema.index({ builderCode: 1 });
+userSchema.index({ oneEmployeeOwnerId: 1 }, { unique: true, sparse: true });
+
+// Virtual: true when the builder verification is confirmed
+userSchema.virtual('isVerifiedBuilder').get(function () {
+    return this.verificationStatus?.builder === 'verified';
+});
+
+// Virtual: true when the agent verification is confirmed
+userSchema.virtual('isVerifiedAgent').get(function () {
+    return this.verificationStatus?.agent === 'verified';
+});
 
 module.exports = mongoose.model('User', userSchema);

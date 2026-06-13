@@ -1,6 +1,7 @@
 const AnalyticsRepository = require('../repositories/AnalyticsRepository');
 const ProjectService = require('./ProjectService');
 const WebhookService = require('./WebhookService');
+const ProjectVisit = require('../models/ProjectVisit');
 
 class AnalyticsService {
   async trackPageView(data) {
@@ -23,6 +24,26 @@ class AnalyticsService {
       }).catch(err => console.error('Webhook error:', err.message));
     }
 
+    // Upsert ProjectVisit by sessionId (fire-and-forget)
+    if (data.sessionId) {
+      ProjectVisit.findOneAndUpdate(
+        { sessionId: data.sessionId },
+        {
+          $setOnInsert: {
+            projectId: data.projectId,
+            ownerId: data.ownerId || '',
+            leadId: data.leadId || null,
+            sessionId: data.sessionId,
+            startTime: new Date(),
+            device: data.device || 'unknown',
+            source: data.source || null,
+            referrer: data.referrer || null,
+          }
+        },
+        { upsert: true, new: true }
+      ).catch(err => console.error('[ProjectVisit] trackPageView error:', err.message));
+    }
+
     return result;
   }
 
@@ -40,6 +61,14 @@ class AnalyticsService {
           visitId,
           duration
         }).catch(err => console.error('Webhook error:', err.message));
+      }
+
+      // Increment ProjectVisit duration (fire-and-forget)
+      if (data.sessionId && duration) {
+        ProjectVisit.findOneAndUpdate(
+          { sessionId: data.sessionId },
+          { $inc: { duration: duration }, $set: { endTime: new Date() } }
+        ).catch(err => console.error('[ProjectVisit] trackTime error:', err.message));
       }
 
       return result;
@@ -63,6 +92,22 @@ class AnalyticsService {
         ctaType: data.ctaType,
         clickId: result?.id || result?._id?.toString()
       }).catch(err => console.error('Webhook error:', err.message));
+    }
+
+    // Push to ProjectVisit.ctaClicks (fire-and-forget)
+    if (data.sessionId) {
+      ProjectVisit.findOneAndUpdate(
+        { sessionId: data.sessionId },
+        {
+          $push: {
+            ctaClicks: {
+              type: data.ctaType,
+              timestamp: new Date(),
+              clickId: result?.id || result?._id?.toString() || null
+            }
+          }
+        }
+      ).catch(err => console.error('[ProjectVisit] trackCtaClick error:', err.message));
     }
 
     return result;
@@ -199,6 +244,14 @@ class AnalyticsService {
     };
   }
 
+  async getPropertyAnalytics(projectId, startDate, endDate) {
+    return AnalyticsRepository.getProjectVisitStats(projectId, startDate, endDate);
+  }
+
+  async getOwnerAnalytics(user, startDate, endDate) {
+    const ownerId = user.id;
+    return AnalyticsRepository.getOwnerVisitStats(ownerId, startDate, endDate);
+  }
 
 }
 

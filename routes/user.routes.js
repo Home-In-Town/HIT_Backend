@@ -104,4 +104,77 @@ router.put("/:id/role", async (req, res) => {
     }
 });
 
+/**
+ * PATCH /api/users/profile
+ * Update current user's profile (name, email, companyName).
+ * Phone changes are NOT allowed here — require OTP flow.
+ */
+router.patch('/profile', protect, async (req, res) => {
+    try {
+        const { name, email, companyName } = req.body;
+        const userId = req.user._id;
+
+        // Explicitly reject phone changes
+        if (req.body.phone !== undefined) {
+            return res.status(400).json({ error: 'Phone changes require OTP verification. Use the forgot MPIN flow.' });
+        }
+
+        // Build update object — only include provided fields
+        const updates = {};
+        if (name !== undefined) {
+            const trimmed = name.trim();
+            if (!trimmed) return res.status(400).json({ error: 'Name cannot be empty' });
+            updates.name = trimmed;
+        }
+        if (email !== undefined) {
+            const trimmedEmail = email.trim().toLowerCase();
+            if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
+                return res.status(400).json({ error: 'Invalid email format' });
+            }
+            // Check for duplicate email on a DIFFERENT user
+            const existing = await User.findOne({ email: trimmedEmail, _id: { $ne: userId } });
+            if (existing) {
+                return res.status(409).json({ error: 'Email is already registered to another account' });
+            }
+            updates.email = trimmedEmail;
+        }
+        if (companyName !== undefined) {
+            updates.companyName = companyName.trim();
+        }
+
+        if (Object.keys(updates).length === 0) {
+            return res.status(400).json({ error: 'No valid fields provided to update' });
+        }
+
+        const updatedUser = await User.findByIdAndUpdate(
+            userId,
+            { $set: updates },
+            { new: true, runValidators: true }
+        ).select('-mpin');
+
+        if (!updatedUser) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        res.json({ user: updatedUser });
+    } catch (error) {
+        console.error('PATCH /profile error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * GET /api/users/crm-redirect-base
+ * Returns the LeadGen backend URL for constructing SSO redirect URLs in the frontend.
+ * Authenticated — only available to admin/builder/agent.
+ */
+router.get('/crm-redirect-base', protect, (req, res) => {
+    const allowedRoles = ['admin', 'builder', 'agent'];
+    if (!allowedRoles.includes(req.user.role)) {
+        return res.status(403).json({ error: 'Insufficient permissions' });
+    }
+    const url = process.env.LEADGEN_BACKEND_URL || '';
+    res.json({ redirectBase: url });
+});
+
 module.exports = router;

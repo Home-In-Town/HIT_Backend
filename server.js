@@ -142,6 +142,7 @@ app.use('/api/files', fileRoutes);
 app.use('/api/internal', internalRoutes);
 app.use('/api/chat', chatRoutes);
 app.use('/api/crm', crmRoutes);
+app.use('/api/crm-bridge', require('./routes/crmBridge.routes'));
 app.use('/api/marketplace', marketplaceRoutes);
 app.use('/api/notifications', notificationRoutes);
 

@@ -64,7 +64,7 @@ const projectSchema = new mongoose.Schema({
     callNumber: String
   },
   slug: { type: String, unique: true, sparse: true },
-  status: { type: String, default: 'draft' }
+  status: { type: String, enum: ['draft', 'published', 'pending_approval', 'deleted'], default: 'draft' }
 }, {
   timestamps: true
 });

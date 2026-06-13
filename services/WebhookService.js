@@ -92,7 +92,12 @@ const sendPageViewEvent = async (data) => {
         projectSlug: data.projectSlug,
         visitId: data.visitId,
         userAgent: data.userAgent,
-        referrer: data.referrer
+        referrer: data.referrer,
+        // New enriched fields
+        device: data.device || null,
+        sections: data.sections || [],
+        ownerId: data.ownerId || null,
+        sessionId: data.sessionId || null,
     });
 };
 
@@ -105,7 +110,9 @@ const sendCtaClickEvent = async (data) => {
         automationId: data.automationId,
         projectId: data.projectId,
         ctaType: data.ctaType, // 'call', 'whatsapp', 'form'
-        clickId: data.clickId
+        clickId: data.clickId,
+        // New enriched fields
+        ownerId: data.ownerId || null,
     });
 };
 
@@ -118,7 +125,10 @@ const sendTimeUpdateEvent = async (data) => {
         automationId: data.automationId,
         projectId: data.projectId,
         visitId: data.visitId,
-        duration: data.duration
+        duration: data.duration,
+        // New enriched fields
+        sessionId: data.sessionId || null,
+        ownerId: data.ownerId || null,
     });
 };
 
@@ -130,7 +140,9 @@ const sendFormSubmitEvent = async (data) => {
         leadId: data.leadId,
         automationId: data.automationId,
         projectId: data.projectId,
-        formData: data.formData
+        formData: data.formData,
+        // New enriched fields
+        ownerId: data.ownerId || null,
     });
 };
 

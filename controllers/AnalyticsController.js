@@ -72,6 +72,27 @@ class AnalyticsController {
       res.status(500).json({ message: error.message });
     }
   }
+
+  async getPropertyAnalytics(req, res) {
+    try {
+      const { projectId } = req.params;
+      const { startDate, endDate } = req.query;
+      const result = await AnalyticsService.getPropertyAnalytics(projectId, startDate, endDate);
+      res.json(result);
+    } catch (error) {
+      res.status(500).json({ message: error.message });
+    }
+  }
+
+  async getOwnerAnalytics(req, res) {
+    try {
+      const { startDate, endDate } = req.query;
+      const result = await AnalyticsService.getOwnerAnalytics(req.user, startDate, endDate);
+      res.json(result);
+    } catch (error) {
+      res.status(500).json({ message: error.message });
+    }
+  }
 }
 
 module.exports = new AnalyticsController();
