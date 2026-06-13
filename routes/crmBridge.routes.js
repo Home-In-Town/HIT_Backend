@@ -7,7 +7,9 @@ const crmAuth = [protect, restrictTo('admin', 'builder', 'agent')];
 
 router.post('/link',           ...crmAuth, ctrl.link);
 router.post('/unlink',         ...crmAuth, ctrl.unlink);
+router.post('/auto-link',      ...crmAuth, ctrl.autoLink);          // auto-detect & link by phone/email
 router.get('/status',          protect,    ctrl.status);
+router.get('/redirect-base',   protect,    ctrl.getRedirectBase);   // SSO base URL for frontend
 router.get('/leads',           ...crmAuth, ctrl.getLeads);
 router.get('/leads/:leadId',   ...crmAuth, ctrl.getLeadById);
 router.get('/analytics',       ...crmAuth, ctrl.getAnalytics);

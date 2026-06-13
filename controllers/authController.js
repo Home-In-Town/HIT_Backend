@@ -7,6 +7,50 @@ const { catchAsync, AppError } = require('../middleware/errorHandler');
 
 const logger = new Logger('AuthController');
 
+/**
+ * Silently attempts to auto-link the HIT user to a matching LeadGen Owner.
+ * Runs in the background — never blocks the login response.
+ * Only runs for admin/builder/agent roles.
+ * Skips if already linked.
+ */
+async function tryAutoLinkLeadGen(user) {
+    try {
+        // Only link CRM-relevant roles
+        if (!['admin', 'builder', 'agent'].includes(user.role)) return;
+        // Already linked — nothing to do
+        if (user.oneEmployeeLinked && user.oneEmployeeOwnerId) return;
+        // Need at least phone or email
+        if (!user.phone && !user.email) return;
+
+        const leadGenService = require('../services/LeadGenService');
+        const result = await leadGenService.lookupOwner(user.phone, user.email);
+
+        if (!result.found || !result.owner) return;
+
+        const owner = result.owner;
+        const hitUserId = user._id.toString();
+        const ownerId = owner._id.toString();
+
+        // Don't auto-link if the Owner is already linked to a DIFFERENT HIT user
+        if (owner.salesProfileId && owner.salesProfileId !== hitUserId) {
+            logger.info('Auto-link skipped: Owner already linked to another user', {
+                userId: hitUserId, ownerId
+            });
+            return;
+        }
+
+        // Perform the link
+        await leadGenService.linkOwner(ownerId, hitUserId);
+        await User.findByIdAndUpdate(user._id, {
+            $set: { oneEmployeeLinked: true, oneEmployeeOwnerId: ownerId }
+        });
+        logger.info('Auto-linked HIT user to LeadGen Owner', { userId: hitUserId, ownerId });
+    } catch (err) {
+        // Never throw — auto-link is best-effort
+        logger.warn('Auto-link attempt failed (non-critical)', { error: err.message });
+    }
+}
+
 // Constants - Updated for cross-domain support (localhost -> Cloud Run)
 const getCookieOptions = (req) => {
     const isProd = process.env.NODE_ENV === 'production';
@@ -119,6 +163,9 @@ exports.verifyOtp = catchAsync(async (req, res) => {
     res.cookie('token', token, getCookieOptions(req));
     logger.info('User verified successfully', { userId: user._id, phone });
 
+    // Fire-and-forget auto-link — never delays the verify response
+    tryAutoLinkLeadGen(user).catch(() => {});
+
     res.json({
         message: 'Verification successful',
         user: {
@@ -170,6 +217,9 @@ exports.login = catchAsync(async (req, res) => {
     // Set Cookie
     res.cookie('token', token, getCookieOptions(req));
     logger.info('User logged in successfully', { userId: user._id, phone });
+
+    // Fire-and-forget auto-link — never delays the login response
+    tryAutoLinkLeadGen(user).catch(() => {});
 
     res.json({
         message: 'Login successful',

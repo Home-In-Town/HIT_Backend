@@ -185,6 +185,8 @@ exports.status = async (req, res) => {
 /**
  * GET /api/crm-bridge/leads
  * Fetches paginated leads for the linked owner from LeadGen.
+ * Uses the Owner's _id (oneEmployeeOwnerId) as salesProfileId because
+ * leads store createdBy.userId = Owner._id (set when leads were created in LeadGen).
  */
 exports.getLeads = async (req, res) => {
     try {
@@ -197,8 +199,9 @@ exports.getLeads = async (req, res) => {
         const { page, limit, status, search, startDate, endDate } = req.query;
         const params = { page, limit, status, search, startDate, endDate };
 
-        // salesProfileId is the HIT User's _id (stored as Owner.salesProfileId during link)
-        const result = await leadGenService.getLeads(req.user._id.toString(), params);
+        // CRITICAL: query by Owner._id (oneEmployeeOwnerId), NOT HIT User._id
+        // Leads in LeadGen have createdBy.userId = Owner._id
+        const result = await leadGenService.getLeads(user.oneEmployeeOwnerId, params);
         return res.json(result);
     } catch (err) {
         logger.error('getLeads error', { error: err.message });
@@ -218,7 +221,8 @@ exports.getLeadById = async (req, res) => {
             return res.status(403).json({ error: 'NOT_LINKED' });
         }
 
-        const result = await leadGenService.getLeadById(req.params.leadId, req.user._id.toString());
+        // Use Owner._id for ownership verification (matches createdBy.userId in LeadGen)
+        const result = await leadGenService.getLeadById(req.params.leadId, user.oneEmployeeOwnerId);
         return res.json(result);
     } catch (err) {
         logger.error('getLeadById error', { error: err.message });
@@ -241,12 +245,97 @@ exports.getAnalytics = async (req, res) => {
         const { startDate, endDate } = req.query;
         const params = { startDate, endDate };
 
-        const result = await leadGenService.getAnalytics(req.user._id.toString(), params);
+        // Use Owner._id (oneEmployeeOwnerId) — matches createdBy.userId in LeadGen leads
+        const result = await leadGenService.getAnalytics(user.oneEmployeeOwnerId, params);
         return res.json(result);
     } catch (err) {
         logger.error('getAnalytics error', { error: err.message });
         return res.status(err.status || 500).json({ error: err.message });
     }
+};
+
+/**
+ * POST /api/crm-bridge/auto-link
+ * Attempts to automatically find and link a matching LeadGen Owner
+ * using the authenticated user's phone and email.
+ * Safe to call repeatedly — idempotent.
+ */
+exports.autoLink = async (req, res) => {
+    try {
+        const user = await User.findById(req.user._id).select(
+            'oneEmployeeLinked oneEmployeeOwnerId phone email role'
+        );
+
+        // Already linked — return current status
+        if (user.oneEmployeeLinked && user.oneEmployeeOwnerId) {
+            try {
+                const ownerData = await leadGenService.getOwnerStatus(user.oneEmployeeOwnerId);
+                return res.json({
+                    linked: true,
+                    alreadyLinked: true,
+                    oneEmployeeOwnerId: user.oneEmployeeOwnerId,
+                    connectedEmail: ownerData.owner.email,
+                    connectedPhone: ownerData.owner.phone || ownerData.owner.mobile,
+                });
+            } catch {
+                return res.json({
+                    linked: true,
+                    alreadyLinked: true,
+                    oneEmployeeOwnerId: user.oneEmployeeOwnerId,
+                    degraded: true,
+                });
+            }
+        }
+
+        if (!user.phone && !user.email) {
+            return res.status(400).json({ error: 'User has no phone or email to match against' });
+        }
+
+        const result = await leadGenService.lookupOwner(user.phone, user.email);
+
+        if (!result.found || !result.owner) {
+            return res.status(404).json({ error: 'NO_MATCHING_OWNER', linked: false });
+        }
+
+        const owner = result.owner;
+        const hitUserId = user._id.toString();
+        const ownerId = owner._id.toString();
+
+        // Owner already linked to a different HIT user
+        if (owner.salesProfileId && owner.salesProfileId !== hitUserId) {
+            return res.status(409).json({ error: 'OWNER_ALREADY_LINKED', linked: false });
+        }
+
+        // Perform the link (idempotent if already same)
+        await leadGenService.linkOwner(ownerId, hitUserId);
+        await User.findByIdAndUpdate(user._id, {
+            $set: { oneEmployeeLinked: true, oneEmployeeOwnerId: ownerId }
+        });
+
+        logger.info('Auto-link via API succeeded', { userId: hitUserId, ownerId });
+
+        return res.json({
+            linked: true,
+            autoLinked: true,
+            ownerEmail: owner.email,
+            ownerPhone: owner.phone || owner.mobile,
+        });
+    } catch (err) {
+        logger.error('autoLink error', { error: err.message });
+        return res.status(err.status || 500).json({ error: err.message });
+    }
+};
+
+/**
+ * GET /api/crm-bridge/redirect-base
+ * Returns the LeadGen backend URL for SSO redirects.
+ * Frontend uses this to construct the SSO validate URL.
+ */
+exports.getRedirectBase = async (req, res) => {
+    return res.json({
+        redirectBase: process.env.LEADGEN_BACKEND_URL ||
+            'https://lead-filteration-backend-624770114041.asia-south1.run.app'
+    });
 };
 
 /**
