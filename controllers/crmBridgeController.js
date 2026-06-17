@@ -192,7 +192,7 @@ exports.getLeads = async (req, res) => {
     try {
         const user = await User.findById(req.user._id).select('oneEmployeeLinked oneEmployeeOwnerId');
 
-        if (!user.oneEmployeeLinked) {
+        if (!user.oneEmployeeLinked || !user.oneEmployeeOwnerId) {
             return res.status(403).json({ error: 'NOT_LINKED' });
         }
 
@@ -217,7 +217,7 @@ exports.getLeadById = async (req, res) => {
     try {
         const user = await User.findById(req.user._id).select('oneEmployeeLinked oneEmployeeOwnerId');
 
-        if (!user.oneEmployeeLinked) {
+        if (!user.oneEmployeeLinked || !user.oneEmployeeOwnerId) {
             return res.status(403).json({ error: 'NOT_LINKED' });
         }
 
@@ -225,7 +225,7 @@ exports.getLeadById = async (req, res) => {
         const result = await leadGenService.getLeadById(req.params.leadId, user.oneEmployeeOwnerId);
         return res.json(result);
     } catch (err) {
-        logger.error('getLeadById error', { error: err.message });
+        logger.error('getLeadById error', { error: err.message, status: err.status, code: err.code, data: err.data });
         return res.status(err.status || 500).json({ error: err.message });
     }
 };
@@ -238,7 +238,7 @@ exports.getAnalytics = async (req, res) => {
     try {
         const user = await User.findById(req.user._id).select('oneEmployeeLinked oneEmployeeOwnerId');
 
-        if (!user.oneEmployeeLinked) {
+        if (!user.oneEmployeeLinked || !user.oneEmployeeOwnerId) {
             return res.status(403).json({ error: 'NOT_LINKED' });
         }
 
@@ -346,7 +346,7 @@ exports.issueSsoToken = async (req, res) => {
     try {
         const user = await User.findById(req.user._id).select('oneEmployeeLinked oneEmployeeOwnerId');
 
-        if (!user.oneEmployeeLinked) {
+        if (!user.oneEmployeeLinked || !user.oneEmployeeOwnerId) {
             return res.status(403).json({ error: 'NOT_LINKED' });
         }
 
