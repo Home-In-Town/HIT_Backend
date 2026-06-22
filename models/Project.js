@@ -8,6 +8,8 @@ const fileSchema = new mongoose.Schema({
 const projectSchema = new mongoose.Schema({
   projectName: { type: String, required: true },
   projectType: { type: String, default: 'flat' },
+  category: { type: String, enum: ['Residential', 'Commercial'] },
+  propertyType: { type: String },
 
   // RBAC: Which builder/agent owns this project
   owner: {

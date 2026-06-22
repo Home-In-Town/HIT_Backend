@@ -47,6 +47,12 @@ class ProjectController {
       const project = await ProjectService.createProject(projectData);
       res.status(201).json(project);
     } catch (error) {
+      if (error.name === 'ValidationError') {
+        return res.status(400).json({
+          message: 'Validation failed',
+          errors: Object.values(error.errors).map(e => e.message),
+        });
+      }
       res.status(500).json({ message: error.message });
     }
   }
@@ -57,6 +63,12 @@ class ProjectController {
       if (!project) return res.status(404).json({ message: 'Project not found' });
       res.json(project);
     } catch (error) {
+      if (error.name === 'ValidationError') {
+        return res.status(400).json({
+          message: 'Validation failed',
+          errors: Object.values(error.errors).map(e => e.message),
+        });
+      }
       res.status(500).json({ message: error.message });
     }
   }
