@@ -111,6 +111,16 @@ class ProjectRepository {
     ).lean();
     return project ? project.landmarks : [];
   }
+
+  // Save or update layout entities for a project
+  async saveLayoutEntities(projectId, layoutEntities) {
+    const project = await Project.findByIdAndUpdate(
+      projectId,
+      { layoutEntities, updatedAt: new Date() },
+      { new: true }
+    ).lean();
+    return project ? project.layoutEntities : [];
+  }
 }
 
 module.exports = new ProjectRepository();

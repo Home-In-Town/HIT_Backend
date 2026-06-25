@@ -53,6 +53,23 @@ const projectSchema = new mongoose.Schema({
       placeId: String
     }
   ],
+  layoutEntities: [
+    {
+      id: String,
+      type: { type: String, enum: ['project-boundary', 'subplot', 'road', 'ai-boundary'] },
+      geometryType: { type: String, enum: ['polygon', 'polyline'] },
+      path: [{ lat: Number, lng: Number }],
+      aiBoundaryId: String,
+      deleted: { type: Boolean, default: false },
+      roadType: { type: String, enum: ['lane', 'internal', 'main'] },
+      status: { type: String, enum: ['available', 'booked', 'sold', 'on-hold'] },
+      plotNumber: String,
+      area: Number,
+      facing: { type: String, enum: ['north', 'south', 'east', 'west'] },
+      roadName: String,
+      saved: { type: Boolean, default: false }
+    }
+  ],
    media: {
     coverImage: fileSchema,
     galleryImages: [fileSchema],

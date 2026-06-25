@@ -39,5 +39,7 @@ router.post("/:projectId/publish", (req, res) => ProjectController.publish(req, 
 // Save landmarks
 router.put("/:projectId/landmarks", (req, res) => ProjectController.saveLandmarks(req, res));
 
-module.exports = router;
+// Save layout entities (map polygons, plots, roads, boundaries)
+router.put("/:projectId/layout-entities", (req, res) => ProjectController.saveLayoutEntities(req, res));
 
+module.exports = router;

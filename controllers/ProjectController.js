@@ -260,6 +260,27 @@ class ProjectController {
       res.status(500).json({ message: error.message });
     }
   }
+
+  // Save layout entities (map polygons, plots, roads, boundaries)
+  async saveLayoutEntities(req, res) {
+    try {
+      const { projectId } = req.params;
+      let { layoutEntities } = req.body;
+
+      if (typeof layoutEntities === 'string') {
+        try { layoutEntities = JSON.parse(layoutEntities); } catch { layoutEntities = []; }
+      }
+
+      if (!Array.isArray(layoutEntities)) {
+        return res.status(400).json({ message: 'layoutEntities must be an array' });
+      }
+
+      const saved = await ProjectService.saveLayoutEntities(projectId, layoutEntities);
+      res.status(200).json({ layoutEntities: saved });
+    } catch (error) {
+      res.status(500).json({ message: error.message });
+    }
+  }
 }
 
 module.exports = new ProjectController();

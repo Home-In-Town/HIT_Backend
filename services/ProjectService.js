@@ -49,6 +49,10 @@ class ProjectService {
   async saveProjectLandmarks(projectId, landmarks) {
     return await ProjectRepository.saveLandmarks(projectId, landmarks);
   }
+
+  async saveLayoutEntities(projectId, layoutEntities) {
+    return await ProjectRepository.saveLayoutEntities(projectId, layoutEntities);
+  }
 }
 
 module.exports = new ProjectService();
