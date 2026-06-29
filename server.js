@@ -32,6 +32,7 @@ const chatRoutes = require('./routes/chat.routes');
 const crmRoutes = require('./routes/crm.routes');
 const marketplaceRoutes = require('./routes/marketplace.routes');
 const notificationRoutes = require('./routes/notification.routes');
+const groupChatRoutes = require('./routes/groupChat.routes');
 
 // Import services
 const { initWebhookCron } = require('./services/WebhookCron');
@@ -145,6 +146,7 @@ app.use('/api/crm', crmRoutes);
 app.use('/api/crm-bridge', require('./routes/crmBridge.routes'));
 app.use('/api/marketplace', marketplaceRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/group-chat', groupChatRoutes);
 
 // 404 handler
 app.use((req, res) => {
@@ -190,7 +192,8 @@ const startServer = async () => {
 
     // Initialize chat socket handlers
     require('./sockets/chat.socket')(io);
-    logger.info('Socket.io chat engine initialized');
+    require('./sockets/groupChat.socket')(io);
+    logger.info('Socket.io chat engine initialized (1:1 + group)');
 
     // Start listening
     server.listen(PORT, () => {
