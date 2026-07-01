@@ -29,8 +29,8 @@ exports.createListing = async (req, res) => {
       tags: tags || []
     });
 
-    await listing.populate({ path: 'project', select: 'projectName city location pricing', populate: { path: 'owner', select: 'name role companyName' } });
-    await listing.populate('listedBy', 'name companyName role');
+    await listing.populate({ path: 'project', select: 'projectName city location pricing', populate: { path: 'owner', select: 'name role companyName phone' } });
+    await listing.populate('listedBy', 'name companyName role phone');
 
     res.status(201).json({ listing });
   } catch (err) {
@@ -51,8 +51,8 @@ exports.getListings = async (req, res) => {
     if (listingType) filter.listingType = listingType;
 
     const listings = await MarketplaceListing.find(filter)
-      .populate({ path: 'project', select: 'projectName city location pricing media configuration slug', populate: { path: 'owner', select: 'name role companyName' } })
-      .populate('listedBy', 'name companyName role')
+      .populate({ path: 'project', select: 'projectName city location pricing media configuration slug', populate: { path: 'owner', select: 'name role companyName phone' } })
+      .populate('listedBy', 'name companyName role phone')
       .sort({ createdAt: -1 })
       .skip((parseInt(page) - 1) * parseInt(limit))
       .limit(parseInt(limit));
