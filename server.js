@@ -52,6 +52,8 @@ const PORT = process.env.PORT || 5001;
 const ALLOWED_ORIGINS = [
   'https://www.homeintown.in',
   'https://homeintown.in',
+  'https://www.homeintown.ai',   // Public map site (Hostinger) — was missing, causing 500 on CORS
+  'https://homeintown.ai',       // Public map site (no-www)
   'http://localhost:3000',
   'http://localhost:3001',
   'http://localhost:5173',
