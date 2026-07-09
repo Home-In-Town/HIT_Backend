@@ -4,41 +4,38 @@ steps:
     args:
       - 'build'
       - '-t'
-      - 'gcr.io/$PROJECT_ID/sales-website-backend:$COMMIT_SHA'
+      - 'asia-south1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/sales-website-backend:$COMMIT_SHA'
       - '-t'
-      - 'gcr.io/$PROJECT_ID/sales-website-backend:latest'
+      - 'asia-south1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/sales-website-backend:latest'
       - '.'
 
-  # Step 2: Push the image to Google Container Registry
+  # Step 2: Push the image to Artifact Registry
   - name: 'gcr.io/cloud-builders/docker'
     args:
       - 'push'
-      - 'gcr.io/$PROJECT_ID/sales-website-backend:$COMMIT_SHA'
+      - 'asia-south1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/sales-website-backend:$COMMIT_SHA'
 
   - name: 'gcr.io/cloud-builders/docker'
     args:
       - 'push'
-      - 'gcr.io/$PROJECT_ID/sales-website-backend:latest'
+      - 'asia-south1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/sales-website-backend:latest'
 
-  # Step 3: Deploy to Cloud Run
+  # Step 3: Deploy to existing Cloud Run service
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
       - 'run'
       - 'deploy'
       - 'sales-website-backend'
-      - '--image=gcr.io/$PROJECT_ID/sales-website-backend:$COMMIT_SHA'
+      - '--image=asia-south1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/sales-website-backend:$COMMIT_SHA'
       - '--region=asia-south1'
       - '--platform=managed'
       - '--allow-unauthenticated'
-      - '--port=8080'
 
-# Store built images in Container Registry
 images:
-  - 'gcr.io/$PROJECT_ID/sales-website-backend:$COMMIT_SHA'
-  - 'gcr.io/$PROJECT_ID/sales-website-backend:latest'
+  - 'asia-south1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/sales-website-backend:$COMMIT_SHA'
+  - 'asia-south1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/sales-website-backend:latest'
 
-# Build timeout — 15 minutes should be plenty
 timeout: '900s'
 
 options:
