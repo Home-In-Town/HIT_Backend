@@ -57,8 +57,13 @@ const ALLOWED_ORIGINS = [
   'http://localhost:3000',
   'http://localhost:3001',
   'http://localhost:5173',
+  'http://127.0.0.1:3000',
   'http://127.0.0.1:5173',
   'http://localhost:5174',
+  // Allow any local network IP on common dev ports (for mobile/LAN testing)
+  /^http:\/\/10\.\d+\.\d+\.\d+:(3000|3001|5173|5174)$/,
+  /^http:\/\/192\.168\.\d+\.\d+:(3000|3001|5173|5174)$/,
+  /^http:\/\/172\.(1[6-9]|2\d|3[01])\.\d+\.\d+:(3000|3001|5173|5174)$/,
   ...(process.env.FRONTEND_URL ? process.env.FRONTEND_URL.split(',').map(o => o.trim()) : []),
 ];
 
@@ -80,7 +85,11 @@ app.use(
 app.use(
   cors({
     origin: (origin, callback) => {
-      if (!origin || ALLOWED_ORIGINS.includes(origin)) {
+      if (!origin) return callback(null, true); // same-origin / server-to-server
+      const allowed = ALLOWED_ORIGINS.some((o) =>
+        typeof o === 'string' ? o === origin : o.test(origin)
+      );
+      if (allowed) {
         callback(null, true);
       } else {
         logger.warn('CORS rejected', { origin });
