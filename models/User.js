@@ -12,7 +12,7 @@ const userSchema = new mongoose.Schema({
     mpin: { type: String }, // Hashed
     role: {
         type: String,
-        enum: ['admin', 'builder', 'agent', 'unassigned', 'user', 'employee'],
+        enum: ['admin', 'builder', 'agent', 'unassigned', 'user', 'employee', 'captain'],
         required: true,
         default: 'unassigned'
     },
@@ -20,7 +20,15 @@ const userSchema = new mongoose.Schema({
     isEmployerConfirmed: { type: Boolean, default: false },
     isVerified: { type: Boolean, default: false },
     isActive: { type: Boolean, default: true },
-    companyName: { type: String }, // Optional: Used by Builders
+    companyName: { type: String }, // Optional: Used by Builders / Captains
+
+    // Captain-specific fields
+    businessLogoUrl: { type: String },
+    businessAddress: { type: String },
+    businessCity: { type: String },
+    businessState: { type: String },
+    businessPinCode: { type: String },
+
     oldId: { type: String }, // For backward compatibility with legacy IDs
     builderCode: { type: String }, // Alternative ID for builder portfolio links
 

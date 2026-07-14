@@ -111,7 +111,7 @@ router.put("/:id/role", async (req, res) => {
  */
 router.patch('/profile', protect, async (req, res) => {
     try {
-        const { name, email, companyName } = req.body;
+        const { name, email, companyName, businessLogoUrl } = req.body;
         const userId = req.user._id;
 
         // Explicitly reject phone changes
@@ -140,6 +140,9 @@ router.patch('/profile', protect, async (req, res) => {
         }
         if (companyName !== undefined) {
             updates.companyName = companyName.trim();
+        }
+        if (businessLogoUrl !== undefined) {
+            updates.businessLogoUrl = businessLogoUrl.trim() || null;
         }
 
         if (Object.keys(updates).length === 0) {

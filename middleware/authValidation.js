@@ -49,9 +49,39 @@ const authValidationSchemas = {
         'string.email': 'Email must be valid',
       }),
     role: Joi.string()
-      .valid('builder', 'agent', 'employee', 'user')
+      .valid('builder', 'agent', 'employee', 'user', 'captain')
       .optional()
       .default('user'),
+
+    // Captain-specific fields (optional for all roles except companyName for captain)
+    companyName: Joi.string()
+      .trim()
+      .min(2)
+      .max(100)
+      .when('role', { is: 'captain', then: Joi.required() })
+      .optional()
+      .messages({
+        'string.min': 'Company name must be at least 2 characters',
+        'string.max': 'Company name must not exceed 100 characters',
+        'any.required': 'Company name is required for captain registration',
+      }),
+    businessAddress: Joi.string().trim().max(200).optional().allow(''),
+    businessCity: Joi.string().trim().max(100).optional().allow(''),
+    businessState: Joi.string().trim().max(100).optional().allow(''),
+    businessPinCode: Joi.string()
+      .pattern(/^\d{6}$/)
+      .optional()
+      .allow('')
+      .messages({
+        'string.pattern.base': 'Business PIN code must be exactly 6 digits',
+      }),
+    businessLogoUrl: Joi.string()
+      .uri({ scheme: ['https'] })
+      .optional()
+      .allow('')
+      .messages({
+        'string.uri': 'Business logo URL must be a valid HTTPS URL',
+      }),
   }),
 
   verifyOtp: Joi.object({

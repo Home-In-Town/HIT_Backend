@@ -79,7 +79,9 @@ const getCookieOptions = (req) => {
  * Initial Registration - Creates a pending user and sends OTP.
  */
 exports.register = catchAsync(async (req, res) => {
-    const { name, phone, mpin, email, role } = req.body;
+    const { name, phone, mpin, email, role,
+        companyName, businessAddress, businessCity, businessState, businessPinCode, businessLogoUrl
+    } = req.body;
 
     logger.info('Registration initiated', { phone, role });
 
@@ -109,15 +111,47 @@ exports.register = catchAsync(async (req, res) => {
             isVerified: false,
             role: role === 'employee' ? 'unassigned' : (role || 'user')
         });
+        if (role === 'captain') {
+            user.companyName = companyName || '';
+            user.businessAddress = businessAddress || '';
+            user.businessCity = businessCity || '';
+            user.businessState = businessState || '';
+            user.businessPinCode = businessPinCode || '';
+            user.businessLogoUrl = businessLogoUrl || null;
+        }
     } else {
         // Update the unverified user with new details
         user.name = sanitizedName;
         user.mpin = hashedMpin;
         user.email = sanitizedEmail;
         user.role = role === 'employee' ? 'unassigned' : (role || user.role || 'user');
+        if (role === 'captain') {
+            user.companyName = companyName || '';
+            user.businessAddress = businessAddress || '';
+            user.businessCity = businessCity || '';
+            user.businessState = businessState || '';
+            user.businessPinCode = businessPinCode || '';
+            user.businessLogoUrl = businessLogoUrl || null;
+        }
     }
 
     await user.save();
+
+    // ── DEV BYPASS: skip OTP and auto-verify ──
+    const bypassOtp = process.env.BYPASS_OTP === 'true' || process.env.BYPASS_OTP === '1';
+    if (bypassOtp) {
+        user.isVerified = true;
+        await user.save();
+
+        const token = jwt.sign(
+            { id: user._id, name: user.name, role: user.role, phone: user.phone },
+            process.env.JWT_SECRET,
+            { expiresIn: '30d' }
+        );
+        res.cookie('token', token, getCookieOptions(req));
+        logger.info('OTP bypassed — user auto-verified', { phone, role: user.role });
+        return res.json({ message: 'Registered and logged in (OTP bypassed)', bypassed: true, user: { id: user._id, name: user.name, role: user.role } });
+    }
 
     // Send MSG91 Verification
     await msg91Service.sendVerification(phone);
@@ -321,7 +355,11 @@ exports.getSession = catchAsync(async (req, res) => {
                     name: user.employerId.name,
                     role: user.employerId.role
                 } : null,
-                isEmployerConfirmed: user.isEmployerConfirmed
+                isEmployerConfirmed: user.isEmployerConfirmed,
+                ...(user.role === 'captain' && {
+                    companyName: user.companyName || '',
+                    businessLogoUrl: user.businessLogoUrl || null
+                })
             }
         });
     } catch (error) {

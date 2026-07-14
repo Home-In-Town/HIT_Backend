@@ -5,7 +5,7 @@ const { protect, restrictTo } = require('../middleware/auth');
 
 // All marketplace routes require authentication
 router.use(protect);
-router.use(restrictTo('admin', 'builder', 'agent'));
+router.use(restrictTo('admin', 'builder', 'agent', 'captain'));
 
 // Listings
 router.post('/listings', marketplaceController.createListing);
