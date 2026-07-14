@@ -90,6 +90,49 @@ router.post("/proxy-upload", upload.single("file"), async (req, res) => {
   }
 });
 
+// ================= LOGO UPLOAD (no projectId required) =================
+router.post("/upload-logo", upload.single("file"), async (req, res) => {
+  try {
+    const file = req.file;
+
+    if (!file) {
+      return res.status(400).json({ error: "No file provided" });
+    }
+
+    const allowedTypes = ["image/jpeg", "image/png", "image/webp"];
+    if (!allowedTypes.includes(file.mimetype)) {
+      return res.status(400).json({ error: "Logo must be JPEG, PNG, or WebP" });
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      return res.status(400).json({ error: "Logo must be 5 MB or smaller" });
+    }
+
+    const safeName = file.originalname.replace(/\s+/g, "-");
+    const uniqueId = crypto.randomUUID();
+    const fileKey = `logos/${uniqueId}-${safeName}`;
+
+    const bucketName = process.env.R2_BUCKET_NAME;
+    console.log(`📤 Logo upload: bucket="${bucketName}", key="${fileKey}", size=${file.size}`);
+
+    await r2.send(new PutObjectCommand({
+      Bucket: bucketName,
+      Key: fileKey,
+      Body: file.buffer,
+      ContentType: file.mimetype,
+    }));
+
+    const fileUrl = `${process.env.R2_PUBLIC_URL}/${fileKey}`;
+
+    console.log(`✅ Logo upload success: ${fileKey}`);
+    res.json({ fileUrl, fileKey });
+
+  } catch (err) {
+    console.error("❌ Logo upload error:", err.message, err);
+    res.status(500).json({ error: "Logo upload failed", detail: err.message });
+  }
+});
+
 // ================= GET SIGNED URL (kept as fallback) =================
 router.post("/get-upload-url", async (req, res) => {
   const project = await Project.findById(req.body.projectId);

@@ -237,7 +237,12 @@ exports.getLeadById = async (req, res) => {
 exports.getAnalytics = async (req, res) => {
     try {
         const user = await User.findById(req.user._id).select('oneEmployeeLinked oneEmployeeOwnerId');
-
+        
+        console.log({
+            linked: user.oneEmployeeLinked,
+            ownerId: user.oneEmployeeOwnerId,
+        });
+        
         if (!user.oneEmployeeLinked || !user.oneEmployeeOwnerId) {
             return res.status(403).json({ error: 'NOT_LINKED' });
         }

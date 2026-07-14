@@ -3,7 +3,7 @@ const router = express.Router();
 const ctrl = require('../controllers/crmBridgeController');
 const { protect, restrictTo } = require('../middleware/auth');
 
-const crmAuth = [protect, restrictTo('admin', 'builder', 'agent')];
+const crmAuth = [protect, restrictTo('admin', 'builder', 'agent', 'captain')];
 
 router.post('/link',           ...crmAuth, ctrl.link);
 router.post('/unlink',         ...crmAuth, ctrl.unlink);
