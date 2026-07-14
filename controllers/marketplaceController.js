@@ -51,7 +51,7 @@ exports.getListings = async (req, res) => {
     if (listingType) filter.listingType = listingType;
 
     const listings = await MarketplaceListing.find(filter)
-      .populate({ path: 'project', select: 'projectName city location pricing media configuration slug', populate: { path: 'owner', select: 'name role companyName phone' } })
+      .populate({ path: 'project', select: 'projectName city location pricing media configuration slug owner', populate: { path: 'owner', select: 'name role companyName phone' } })
       .populate('listedBy', 'name companyName role phone')
       .sort({ createdAt: -1 })
       .skip((parseInt(page) - 1) * parseInt(limit))
@@ -59,18 +59,49 @@ exports.getListings = async (req, res) => {
 
     const total = await MarketplaceListing.countDocuments(filter);
 
-    // Captain: own listings first, then others
+    // Captain: 1) own listings, 2) listings in captain's city/state, 3) everything else
     if (req.user && req.user.role === 'captain') {
       const captainId = req.user._id.toString();
-      const captainListings = listings.filter(l => {
+      console.log('[Captain Sort] captainId:', captainId);
+      console.log('[Captain Sort] listings count:', listings.length);
+      listings.forEach((l, i) => {
         const listedById = l.listedBy?._id?.toString() || l.listedBy?.toString();
-        return listedById === captainId;
+        const projectOwnerId = l.project?.owner?._id?.toString() || l.project?.owner?.toString();
+        console.log(`[Captain Sort] listing[${i}] "${l.project?.projectName || 'buying'}" | listedBy: ${listedById} | projectOwner: ${projectOwnerId} | listingId: ${l._id}`);
       });
-      const otherListings = listings.filter(l => {
-        const listedById = l.listedBy?._id?.toString() || l.listedBy?.toString();
-        return listedById !== captainId;
-      });
-      const sortedListings = [...captainListings, ...otherListings];
+
+      // Normalise location strings for loose matching
+      const captainCity  = (req.user.businessCity  || '').toLowerCase().trim();
+      const captainState = (req.user.businessState || '').toLowerCase().trim();
+
+      const tier1 = []; // captain's own
+      const tier2 = []; // nearby (same city or state)
+      const tier3 = []; // everything else
+
+      for (const listing of listings) {
+        const listedById = listing.listedBy?._id?.toString() || listing.listedBy?.toString();
+
+        const projectOwnerId = listing.project?.owner?._id?.toString() || listing.project?.owner?.toString();
+        if (listedById === captainId || projectOwnerId === captainId) {
+          tier1.push(listing);
+          continue;
+        }
+
+        // Project city comes from the populated project field
+        const projectCity  = (listing.project?.city  || '').toLowerCase().trim();
+        const projectLocation = (listing.project?.location || '').toLowerCase().trim();
+
+        const cityMatch  = captainCity  && (projectCity.includes(captainCity)  || captainCity.includes(projectCity));
+        const stateMatch = captainState && projectLocation.includes(captainState);
+
+        if (cityMatch || stateMatch) {
+          tier2.push(listing);
+        } else {
+          tier3.push(listing);
+        }
+      }
+
+      const sortedListings = [...tier1, ...tier2, ...tier3];
       return res.status(200).json({ listings: sortedListings, total, page: parseInt(page), limit: parseInt(limit) });
     }
 

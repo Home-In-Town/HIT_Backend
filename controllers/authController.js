@@ -356,9 +356,11 @@ exports.getSession = catchAsync(async (req, res) => {
                     role: user.employerId.role
                 } : null,
                 isEmployerConfirmed: user.isEmployerConfirmed,
+                companyName: user.companyName || '',
                 ...(user.role === 'captain' && {
-                    companyName: user.companyName || '',
-                    businessLogoUrl: user.businessLogoUrl || null
+                    businessLogoUrl: user.businessLogoUrl || null,
+                    businessCity:    user.businessCity    || '',
+                    businessState:   user.businessState   || '',
                 })
             }
         });
