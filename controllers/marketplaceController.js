@@ -59,6 +59,21 @@ exports.getListings = async (req, res) => {
 
     const total = await MarketplaceListing.countDocuments(filter);
 
+    // Captain: own listings first, then others
+    if (req.user && req.user.role === 'captain') {
+      const captainId = req.user._id.toString();
+      const captainListings = listings.filter(l => {
+        const listedById = l.listedBy?._id?.toString() || l.listedBy?.toString();
+        return listedById === captainId;
+      });
+      const otherListings = listings.filter(l => {
+        const listedById = l.listedBy?._id?.toString() || l.listedBy?.toString();
+        return listedById !== captainId;
+      });
+      const sortedListings = [...captainListings, ...otherListings];
+      return res.status(200).json({ listings: sortedListings, total, page: parseInt(page), limit: parseInt(limit) });
+    }
+
     res.status(200).json({ listings, total, page: parseInt(page), limit: parseInt(limit) });
   } catch (err) {
     console.error('getListings error:', err);
