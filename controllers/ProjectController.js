@@ -11,7 +11,7 @@ class ProjectController {
       if (!user || user.role === 'admin') {
         // Admin or unauthenticated: return all projects
         projects = await ProjectService.getAllProjects();
-      } else if (user.role === 'builder' || user.role === 'agent') {
+      } else if (user.role === 'builder' || user.role === 'agent' || user.role === 'captain') {
         // Builder or Agent: return only their owned projects
         projects = await ProjectService.getProjectsByOwner(user.id);
       } else {
@@ -40,7 +40,7 @@ class ProjectController {
       const projectData = { ...req.body };
 
       // Attach the owner (builder or agent) ID
-      if (user && (user.role === 'builder' || user.role === 'agent' || user.role === 'admin')) {
+      if (user && (user.role === 'builder' || user.role === 'agent' || user.role === 'admin' || user.role === 'captain')) {
         projectData.owner = user.id;
       }
 
