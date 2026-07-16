@@ -2,6 +2,33 @@ const ProjectService = require('../services/ProjectService');
 const User = require('../models/User');
 const Project = require('../models/Project');
 
+/**
+ * Fire-and-forget: Notify OneEmployee of project changes for linked users.
+ * Never throws — safe to call in any context without try-catch.
+ */
+async function notifyProjectUpdate(userId, projectId, action, projectName) {
+    try {
+        if (!userId) return;
+        const user = await User.findById(userId).select('oneEmployeeLinked oneEmployeeOwnerId').lean();
+        if (!user || !user.oneEmployeeLinked || !user.oneEmployeeOwnerId) return;
+
+        const LEADGEN_URL = process.env.LEADGEN_BACKEND_URL || 'https://lead-filteration-backend-624770114041.asia-south1.run.app';
+        const INTERNAL_SECRET = process.env.INTERNAL_API_SECRET || 'hit-internal-secret-2024';
+        const axios = require('axios');
+
+        await axios.post(`${LEADGEN_URL}/api/internal/project-sync`, {
+            ownerId: user.oneEmployeeOwnerId,
+            hitUserId: userId.toString(),
+            projectId: projectId.toString(),
+            action,
+            projectName: projectName || ''
+        }, {
+            headers: { 'x-internal-secret': INTERNAL_SECRET },
+            timeout: 5000
+        }).catch(() => {}); // swallow errors — never block project operations
+    } catch { /* silent */ }
+}
+
 class ProjectController {
   async getAll(req, res) {
     try {
@@ -45,6 +72,10 @@ class ProjectController {
       }
 
       const project = await ProjectService.createProject(projectData);
+
+      // Notify OneEmployee (fire-and-forget)
+      notifyProjectUpdate(user?.id, project._id, 'created', project.projectName);
+
       res.status(201).json(project);
     } catch (error) {
       if (error.name === 'ValidationError') {
@@ -61,6 +92,10 @@ class ProjectController {
     try {
       const project = await ProjectService.updateProject(req.params.projectId, req.body);
       if (!project) return res.status(404).json({ message: 'Project not found' });
+
+      // Notify OneEmployee (fire-and-forget)
+      notifyProjectUpdate(project.owner, project._id, 'updated', project.projectName);
+
       res.json(project);
     } catch (error) {
       if (error.name === 'ValidationError') {
@@ -75,8 +110,17 @@ class ProjectController {
 
   async delete(req, res) {
     try {
+      // Get project before deleting (for notification)
+      const projectBefore = await Project.findById(req.params.projectId).select('owner projectName').lean();
+
       const success = await ProjectService.deleteProject(req.params.projectId);
       if (!success) return res.status(404).json({ message: 'Project not found' });
+
+      // Notify OneEmployee (fire-and-forget)
+      if (projectBefore) {
+          notifyProjectUpdate(projectBefore.owner, req.params.projectId, 'deleted', projectBefore.projectName);
+      }
+
       res.status(204).send();
     } catch (error) {
       res.status(500).json({ message: error.message });
