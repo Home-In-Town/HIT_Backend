@@ -325,6 +325,36 @@ class ProjectController {
       res.status(500).json({ message: error.message });
     }
   }
+
+  async assignCaptain(req, res) {
+    try {
+      const { projectId } = req.params;
+      const { captainId } = req.body;
+
+      const result = await ProjectService.assignCaptainToProject(projectId, captainId);
+      res.json(result);
+    } catch (error) {
+      if (error.message === 'Project not found') {
+        return res.status(404).json({ message: error.message });
+      }
+      if (error.message === 'Invalid captain') {
+        return res.status(400).json({ message: 'The specified user is not a valid captain' });
+      }
+      res.status(500).json({ message: error.message });
+    }
+  }
+
+  async getCaptains(req, res) {
+    try {
+      const captains = await User.find({ role: 'captain' })
+        .select('_id name phone companyName')
+        .sort({ name: 1 })
+        .lean();
+      res.json(captains);
+    } catch (error) {
+      res.status(500).json({ message: error.message });
+    }
+  }
 }
 
 module.exports = new ProjectController();

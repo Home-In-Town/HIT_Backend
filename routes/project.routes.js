@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const ProjectController = require("../controllers/ProjectController");
-const { protect } = require("../middleware/auth");
+const { protect, restrictTo } = require("../middleware/auth");
 
 // --- PUBLIC ROUTES (No Auth Required) ---
 
@@ -17,6 +17,12 @@ router.get("/public/owners/:ownerId/projects", (req, res) => ProjectController.g
 
 // --- PROTECTED ROUTES (Auth Required) ---
 router.use(protect);
+
+// Get all captains (admin only) - must be before /:projectId routes
+router.get("/captains", restrictTo('admin'), (req, res) => ProjectController.getCaptains(req, res));
+
+// Assign captain to project (admin only)
+router.put("/:projectId/assign-captain", restrictTo('admin'), (req, res) => ProjectController.assignCaptain(req, res));
 
 // List all projects (filtered by role)
 router.get("/", (req, res) => ProjectController.getAll(req, res));

@@ -1,5 +1,7 @@
 const ProjectRepository = require('../repositories/ProjectRepository');
 const slugify = require('../utils/slugify');
+const User = require('../models/User');
+const Notification = require('../models/Notification');
 
 class ProjectService {
   async getAllProjects() {
@@ -52,6 +54,63 @@ class ProjectService {
 
   async saveLayoutEntities(projectId, layoutEntities) {
     return await ProjectRepository.saveLayoutEntities(projectId, layoutEntities);
+  }
+
+  async assignCaptainToProject(projectId, captainId) {
+    // 1. Fetch existing project
+    const project = await ProjectRepository.getById(projectId);
+    if (!project) throw new Error('Project not found');
+
+    // 2. If captainId is not null, validate it's a real captain
+    if (captainId !== null) {
+      const captain = await User.findById(captainId).lean();
+      if (!captain || captain.role !== 'captain') {
+        throw new Error('Invalid captain');
+      }
+    }
+
+    // 3. Capture previous owner before update
+    const previousOwnerId = project.owner ? (typeof project.owner === 'object' ? project.owner._id?.toString() : project.owner.toString()) : null;
+    const newOwnerId = captainId ? captainId.toString() : null;
+
+    // 4. If no change, return project as-is (idempotent for null→null)
+    if (previousOwnerId === newOwnerId) {
+      return project;
+    }
+
+    // 5. Update owner field
+    const updatedProject = await ProjectRepository.update(projectId, { owner: captainId });
+
+    // 6. Send notifications (fire-and-forget, errors logged not thrown)
+    try {
+      const projectName = updatedProject.projectName || 'Unnamed Project';
+
+      // Notify new captain (if assigning, not unassigning)
+      if (captainId) {
+        await Notification.create({
+          recipient: captainId,
+          type: 'system',
+          title: 'Project Assigned',
+          message: `You have been assigned to project: ${projectName}`,
+          reference: { model: 'Project', id: projectId }
+        });
+      }
+
+      // Notify old captain (if one existed)
+      if (previousOwnerId) {
+        await Notification.create({
+          recipient: previousOwnerId,
+          type: 'system',
+          title: 'Project Unassigned',
+          message: `You have been removed from project: ${projectName}`,
+          reference: { model: 'Project', id: projectId }
+        });
+      }
+    } catch (notifError) {
+      console.error('Failed to create assignment notification:', notifError);
+    }
+
+    return updatedProject;
   }
 }
 
