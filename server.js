@@ -37,6 +37,7 @@ const crmRoutes = require('./routes/crm.routes');
 const marketplaceRoutes = require('./routes/marketplace.routes');
 const notificationRoutes = require('./routes/notification.routes');
 const groupChatRoutes = require('./routes/groupChat.routes');
+const shareRoutes = require('./routes/share.routes');
 
 // Import services
 const { initWebhookCron } = require('./services/WebhookCron');
@@ -153,6 +154,7 @@ app.use('/api/crm-bridge', require('./routes/crmBridge.routes'));
 app.use('/api/marketplace', marketplaceRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/group-chat', groupChatRoutes);
+app.use('/api/share', shareRoutes);
 
 // 404 handler
 app.use((req, res) => {
