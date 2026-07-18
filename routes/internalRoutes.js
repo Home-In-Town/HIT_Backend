@@ -113,6 +113,180 @@ router.get('/projects-by-phone/:phone', async (req, res) => {
 });
 
 /**
+ * POST /api/internal/create-account
+ * Creates a new HIT user account from OneEmployee (pre-verified, no OTP needed).
+ * Used when a Phase 1 user wants to enable Phase 2 projects without having a HIT account.
+ * Body: { name, phone, mpin (plaintext — will be hashed), email, companyName, oneEmployeeOwnerId }
+ */
+router.post('/create-account', async (req, res) => {
+    try {
+        const { name, phone, mpin, email, companyName, oneEmployeeOwnerId } = req.body;
+
+        if (!name || !phone || !mpin) {
+            return res.status(400).json({ error: 'name, phone, and mpin are required' });
+        }
+
+        // Validate phone (10-digit Indian number)
+        const cleanPhone = phone.toString().replace(/\D/g, '');
+        if (cleanPhone.length !== 10) {
+            return res.status(400).json({ error: 'Phone must be a valid 10-digit Indian number' });
+        }
+
+        // Check if phone already exists
+        const existing = await User.findOne({ phone: cleanPhone });
+        if (existing) {
+            return res.status(409).json({
+                error: 'An account with this phone number already exists on HomeInTown. Use "Connect" instead.',
+                existingUserId: existing._id.toString()
+            });
+        }
+
+        // Hash MPIN
+        const bcrypt = require('bcryptjs');
+        const hashedMpin = await bcrypt.hash(mpin.toString(), 12);
+
+        // Create verified user directly (no OTP — OneEmployee already verified)
+        const user = await User.create({
+            name: name.trim(),
+            phone: cleanPhone,
+            mpin: hashedMpin,
+            email: email?.trim() || undefined,
+            companyName: companyName?.trim() || undefined,
+            role: 'builder',
+            isVerified: true,
+            isActive: true,
+            // Link back to OneEmployee
+            oneEmployeeLinked: true,
+            oneEmployeeOwnerId: oneEmployeeOwnerId || undefined,
+        });
+
+        console.log(`✅ [Internal] HIT account created from OneEmployee: ${user.name} (${user.phone}) → ${user._id}`);
+
+        res.status(201).json({
+            success: true,
+            user: {
+                id: user._id.toString(),
+                name: user.name,
+                phone: user.phone,
+                role: user.role,
+                email: user.email || null,
+            }
+        });
+    } catch (error) {
+        if (error.code === 11000) {
+            return res.status(409).json({ error: 'Account with this phone already exists' });
+        }
+        console.error('Internal Create Account Error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * POST /api/internal/projects/:hitUserId
+ * Creates a new project in HIT Backend for the given user.
+ * Called from OneEmployee when a user adds a project from their dashboard.
+ */
+router.post('/projects/:hitUserId', async (req, res) => {
+    try {
+        const { hitUserId } = req.params;
+        const Project = require('../models/Project');
+
+        const user = await User.findById(hitUserId);
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        const projectData = {
+            ...req.body,
+            owner: user._id,
+            status: 'draft',
+        };
+
+        const project = await Project.create(projectData);
+        console.log(`✅ [Internal] Project created from OneEmployee: ${project.projectName} (${project._id}) for user ${user.name}`);
+
+        res.status(201).json({
+            success: true,
+            project: {
+                _id: project._id,
+                projectName: project.projectName,
+                projectType: project.projectType,
+                city: project.city,
+                location: project.location,
+                category: project.category,
+                status: project.status,
+                createdAt: project.createdAt,
+            }
+        });
+    } catch (error) {
+        if (error.name === 'ValidationError') {
+            return res.status(400).json({ error: 'Validation failed', details: Object.values(error.errors).map(e => e.message) });
+        }
+        console.error('Internal Create Project Error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * PUT /api/internal/projects/:hitUserId/:projectId
+ * Updates an existing project from OneEmployee.
+ */
+router.put('/projects/:hitUserId/:projectId', async (req, res) => {
+    try {
+        const { hitUserId, projectId } = req.params;
+        const Project = require('../models/Project');
+
+        const user = await User.findById(hitUserId);
+        if (!user) return res.status(404).json({ error: 'User not found' });
+
+        const project = await Project.findOneAndUpdate(
+            { _id: projectId, owner: user._id },
+            { $set: req.body },
+            { new: true, runValidators: true }
+        );
+
+        if (!project) return res.status(404).json({ error: 'Project not found or not owned by this user' });
+
+        console.log(`✅ [Internal] Project updated from OneEmployee: ${project.projectName} (${project._id})`);
+        res.json({ success: true, project });
+    } catch (error) {
+        if (error.name === 'ValidationError') {
+            return res.status(400).json({ error: 'Validation failed', details: Object.values(error.errors).map(e => e.message) });
+        }
+        console.error('Internal Update Project Error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * DELETE /api/internal/projects/:hitUserId/:projectId
+ * Deletes (soft) a project from OneEmployee.
+ */
+router.delete('/projects/:hitUserId/:projectId', async (req, res) => {
+    try {
+        const { hitUserId, projectId } = req.params;
+        const Project = require('../models/Project');
+
+        const user = await User.findById(hitUserId);
+        if (!user) return res.status(404).json({ error: 'User not found' });
+
+        const project = await Project.findOneAndUpdate(
+            { _id: projectId, owner: user._id },
+            { $set: { status: 'deleted' } },
+            { new: true }
+        );
+
+        if (!project) return res.status(404).json({ error: 'Project not found or not owned by this user' });
+
+        console.log(`🗑️ [Internal] Project deleted from OneEmployee: ${project.projectName} (${project._id})`);
+        res.json({ success: true, message: 'Project deleted' });
+    } catch (error) {
+        console.error('Internal Delete Project Error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
  * GET /api/internal/projects/:hitUserId
  * Returns projects owned by a user with the given HIT User ID.
  * Used by OneEmployee backend for project-based automation.
