@@ -301,11 +301,15 @@ router.get('/projects/:hitUserId', async (req, res) => {
             return res.status(404).json({ message: 'User not found' });
         }
 
-        const projects = await Project.find({
-            owner: user._id,
-            status: { $ne: 'deleted' }
-        })
-            .select('projectName slug _id coverImage city location projectType category reraApproved reraNumber projectStatus pricing configuration amenities cta media status createdAt updatedAt')
+        // For admin users: return ALL projects (they manage everything)
+        // For builder/agent: return only their owned projects
+        const query = { status: { $ne: 'deleted' } };
+        if (user.role !== 'admin') {
+            query.owner = user._id;
+        }
+
+        const projects = await Project.find(query)
+            .select('projectName slug _id coverImage city location projectType category reraApproved reraNumber projectStatus pricing configuration amenities cta media status owner createdAt updatedAt')
             .sort({ createdAt: -1 });
 
         res.status(200).json({
