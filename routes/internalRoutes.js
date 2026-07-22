@@ -352,6 +352,23 @@ router.get('/user/:hitUserId', async (req, res) => {
 });
 
 /**
+ * GET /api/internal/user-by-phone/:phone
+ * Looks up a HIT user by phone number.
+ * Returns basic info or 404 if not found.
+ */
+router.get('/user-by-phone/:phone', async (req, res) => {
+    try {
+        const phone = req.params.phone.replace(/\D/g, '');
+        const user = await User.findOne({ phone }).select('_id name phone email role isVerified').lean();
+        if (!user) return res.status(404).json({ error: 'No account found with this phone' });
+        res.json({ id: user._id.toString(), name: user.name, phone: user.phone, email: user.email, role: user.role });
+    } catch (error) {
+        console.error('Internal user-by-phone error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
  * POST /api/internal/link-oneemployee
  * Called by OneEmployee when a user confirms linking.
  * Updates the HIT User record with oneEmployeeLinked + oneEmployeeOwnerId.
