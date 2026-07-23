@@ -41,6 +41,9 @@ class ProjectController {
       } else if (user.role === 'builder' || user.role === 'agent' || user.role === 'captain') {
         // Builder or Agent: return only their owned projects
         projects = await ProjectService.getProjectsByOwner(user.id);
+      } else if (user.role === 'employee') {
+        // Employee: return projects assigned to them
+        projects = await ProjectService.getProjectsAssignedToAgent(user.id);
       } else {
         projects = [];
       }
@@ -352,6 +355,45 @@ class ProjectController {
         .lean();
       res.json(captains);
     } catch (error) {
+      res.status(500).json({ message: error.message });
+    }
+  }
+
+  // Get agents (employees) under the logged-in captain
+  async getMyAgents(req, res) {
+    try {
+      const agents = await User.find({
+        employerId: req.user._id,
+        isEmployerConfirmed: true,
+        role: 'employee'
+      })
+        .select('_id name phone')
+        .sort({ name: 1 })
+        .lean();
+      res.json(agents);
+    } catch (error) {
+      res.status(500).json({ message: error.message });
+    }
+  }
+
+  // Assign/reassign/unassign an agent to a project (captain only)
+  async assignAgent(req, res) {
+    try {
+      const { projectId } = req.params;
+      const { agentId } = req.body; // null = unassign
+
+      const result = await ProjectService.assignAgentToProject(projectId, agentId, req.user._id.toString());
+      res.json(result);
+    } catch (error) {
+      if (error.message === 'Not authorized') {
+        return res.status(403).json({ message: 'You do not own this project' });
+      }
+      if (error.message === 'Project not found') {
+        return res.status(404).json({ message: error.message });
+      }
+      if (error.message === 'Invalid agent' || error.message === 'Agent not under your team') {
+        return res.status(400).json({ message: error.message });
+      }
       res.status(500).json({ message: error.message });
     }
   }

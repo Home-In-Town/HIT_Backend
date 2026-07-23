@@ -13,12 +13,18 @@ function mapProject(project) {
 
 class ProjectRepository {
   async getAll() {
-    const projects = await Project.find().populate('owner', 'name role companyName phone').lean();
+    const projects = await Project.find()
+      .populate('owner', 'name role companyName phone')
+      .populate('assignedAgent', 'name phone')
+      .lean();
     return projects.map(mapProject);
   }
 
   async getById(id) {
-    const project = await Project.findById(id).populate('owner', 'name role companyName phone').lean();
+    const project = await Project.findById(id)
+      .populate('owner', 'name role companyName phone')
+      .populate('assignedAgent', 'name phone')
+      .lean();
     return mapProject(project);
   }
 
@@ -26,7 +32,21 @@ class ProjectRepository {
    * Get projects by owner ID (for builder/agent role)
    */
   async getByOwner(ownerId) {
-    const projects = await Project.find({ owner: ownerId }).populate('owner', 'name role companyName phone').lean();
+    const projects = await Project.find({ owner: ownerId })
+      .populate('owner', 'name role companyName phone')
+      .populate('assignedAgent', 'name phone')
+      .lean();
+    return projects.map(mapProject);
+  }
+
+  /**
+   * Get projects assigned to an agent (employee)
+   */
+  async getByAssignedAgent(agentId) {
+    const projects = await Project.find({ assignedAgent: agentId })
+      .populate('owner', 'name role companyName phone')
+      .populate('assignedAgent', 'name phone')
+      .lean();
     return projects.map(mapProject);
   }
 
@@ -99,7 +119,10 @@ class ProjectRepository {
     return mapProject(project);
   }
   async getPublished() {
-    const projects = await Project.find({ status: 'published' }).populate('owner', 'name role companyName phone').lean();
+    const projects = await Project.find({ status: 'published' })
+      .populate('owner', 'name role companyName phone')
+      .populate('assignedAgent', 'name phone')
+      .lean();
     return projects.map(mapProject);
   }
   // Save or update landmarks for a project

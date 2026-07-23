@@ -21,8 +21,14 @@ router.use(protect);
 // Get all captains (admin only) - must be before /:projectId routes
 router.get("/captains", restrictTo('admin'), (req, res) => ProjectController.getCaptains(req, res));
 
+// Get agents under the logged-in captain (captain only) - must be before /:projectId routes
+router.get("/my-agents", restrictTo('captain'), (req, res) => ProjectController.getMyAgents(req, res));
+
 // Assign captain to project (admin only)
 router.put("/:projectId/assign-captain", restrictTo('admin'), (req, res) => ProjectController.assignCaptain(req, res));
+
+// Assign agent to project (captain only)
+router.put("/:projectId/assign-agent", restrictTo('captain'), (req, res) => ProjectController.assignAgent(req, res));
 
 // List all projects (filtered by role)
 router.get("/", (req, res) => ProjectController.getAll(req, res));
