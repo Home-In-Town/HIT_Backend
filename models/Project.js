@@ -18,6 +18,14 @@ const projectSchema = new mongoose.Schema({
     index: true
   },
 
+  // Agent assigned to this project by the captain (owner)
+  assignedAgent: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    index: true,
+    default: null
+  },
+
   city: String,
   location: String,
   latitude: Number,

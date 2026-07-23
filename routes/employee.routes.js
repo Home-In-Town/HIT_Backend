@@ -7,13 +7,13 @@ const { protect, restrictTo } = require('../middleware/auth');
  * GET /api/employee/search
  * Employer only: Search unassigned employees by phone
  */
-router.get('/search', protect, restrictTo('builder', 'agent', 'admin'), employeeController.search);
+router.get('/search', protect, restrictTo('builder', 'agent', 'admin', 'captain'), employeeController.search);
 
 /**
  * POST /api/employee/request-assignment
  * Employer only: Request an employee
  */
-router.post('/request-assignment', protect, restrictTo('builder', 'agent', 'admin'), employeeController.requestAssignment);
+router.post('/request-assignment', protect, restrictTo('builder', 'agent', 'admin', 'captain'), employeeController.requestAssignment);
 
 /**
  * POST /api/employee/confirm-assignment
@@ -37,12 +37,12 @@ router.post('/meeting', protect, restrictTo('employee'), employeeController.logM
  * GET /api/employee/my-employees
  * Employer only: List their employees
  */
-router.get('/my-employees', protect, restrictTo('builder', 'agent', 'admin'), employeeController.getMyEmployees);
+router.get('/my-employees', protect, restrictTo('builder', 'agent', 'admin', 'captain'), employeeController.getMyEmployees);
 
 /**
  * GET /api/employee/history/:employeeId
  * Employer only: Get tracking and meeting history for their employee
  */
-router.get('/history/:employeeId', protect, restrictTo('builder', 'agent', 'admin', 'employee'), employeeController.getHistory);
+router.get('/history/:employeeId', protect, restrictTo('builder', 'agent', 'admin', 'captain', 'employee'), employeeController.getHistory);
 
 module.exports = router;
