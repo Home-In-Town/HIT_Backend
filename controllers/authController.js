@@ -137,7 +137,9 @@ exports.register = catchAsync(async (req, res) => {
 
     await user.save();
 
-    // ── DEV BYPASS: skip OTP and auto-verify ──
+    // ── TEMPORARY BYPASS: skip OTP and auto-verify ──
+    // ⚠️ Currently enabled in PRODUCTION to unblock registrations while MSG91 delivery is investigated.
+    // TODO: Set BYPASS_OTP=false (or remove from env) once MSG91 is confirmed reliable.
     const bypassOtp = process.env.BYPASS_OTP === 'true' || process.env.BYPASS_OTP === '1';
     if (bypassOtp) {
         user.isVerified = true;
