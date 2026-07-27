@@ -1,112 +1,124 @@
-# Sales Website Backend
+# HomeInTown Backend
 
-This is the backend service for the Sales Website application. It handles project management, data storage (MongoDB), and analytics tracking for real estate projects. It provides a RESTful API for the frontend application.
+Production backend for the HomeInTown real estate platform. Deployed on Google Cloud Run.
 
-## 🚀 Features
+**Live URL:** `https://sales-website-backend-624770114041.asia-south1.run.app`  
+**GCP Project:** `homeintown-486304`  
+**Current revision:** `00046-rrs`
 
-- **Project Management**: Create, read, update, and delete real estate project details.
-- **Publishing System**: Publish projects to generate unique, publicly accessible URLs (slugs).
-- **Public API**: Serve project data to public-facing pages.
-- **Analytics Tracking**: Track visitor interactions including page views, time spent, and CTA clicks (WhatsApp/Call).
+---
 
-## 🛠️ Tech Stack
+## Tech Stack
 
-- **Runtime**: Node.js
-- **Framework**: Express.js
-- **Database**: MongoDB (via Mongoose)
-- **Utilities**: 
-  - `axios` for external API requests
-  - `cors` for cross-origin resource sharing
-  - `dotenv` for environment configuration
-  - `joi` for validation
+- **Runtime:** Node.js
+- **Framework:** Express 5
+- **Database:** MongoDB Atlas (Mongoose)
+- **Real-time:** Socket.io
+- **Auth:** JWT (HTTP-only cookies) + bcryptjs
+- **File uploads:** Multer → Cloudflare R2
+- **Validation:** Joi
+- **Rate limiting:** express-rate-limit
 
-## 📦 Installation
+---
 
-1. Navigate to the backend directory:
-   ```bash
-   cd backend
-   ```
+## Features
 
-2. Install dependencies:
-   ```bash
-   npm install
-   ```
+- **Project Management** — CRUD + publish with auto-generated public slugs
+- **Media Uploads** — proxy upload to Cloudflare R2 (`sales-assets` bucket)
+- **Analytics Tracking** — pageviews, time spent, CTA clicks per project
+- **CRM Pipeline** — lead management with stages
+- **Chat** — Socket.io real-time messaging between builders/agents
+- **Marketplace** — property marketplace listings
+- **Employee Tracking** — GPS location history
+- **Organizations** — builder → agent hierarchies
+- **Notifications** — real-time via Socket.io
+- **Role-based Auth** — `admin`, `builder`, `agent`, `employee`, `user`
 
-3. Configure Environment Variables:
-   Create a `.env` file in the root with the following:
-   ```env
-   PORT=5001
-   MONGODB_URI=your_mongodb_connection_string
-   ```
+---
 
-## 🏃‍♂️ Running the Server
+## Quick Start
 
-### Development Mode
-Runs the server with hot-reloading (using `--watch` or nodemon).
 ```bash
-npm run dev
+npm install
+npm run dev   # development with --watch
+npm start     # production
 ```
 
-### Production Start
-```bash
-npm start
+Create `.env`:
+```env
+PORT=5001
+MONGODB_URI=your_mongodb_connection_string
+JWT_SECRET=your_jwt_secret
+R2_ACCOUNT_ID=
+R2_ACCESS_KEY_ID=
+R2_SECRET_ACCESS_KEY=
+R2_BUCKET_NAME=sales-assets
 ```
 
-## 🔌 API Endpoints
+---
 
-The server runs on `http://localhost:5001` by default.
+## Key API Routes
 
-### Project Management (`/api/projects`)
-
+### Projects (`/api/projects`)
 | Method | Endpoint | Description |
-| :--- | :--- | :--- |
+|--------|----------|-------------|
 | `GET` | `/` | List all projects |
-| `POST` | `/` | Create a new project |
-| `GET` | `/:projectId` | Get details of a specific project |
-| `PUT` | `/:projectId` | Update a project |
-| `DELETE` | `/:projectId` | Delete a project |
-| `POST` | `/:projectId/publish` | Publish a project (generates public slug) |
+| `POST` | `/` | Create project |
+| `GET` | `/:id` | Get project |
+| `PUT` | `/:id` | Update project |
+| `DELETE` | `/:id` | Delete project |
+| `POST` | `/:id/publish` | Publish (generates slug) |
 
-### Public Access (`/api/public`)
-
+### Public (`/api/public`)
 | Method | Endpoint | Description |
-| :--- | :--- | :--- |
-| `GET` | `/projects/:slug` | Get public project details by slug |
+|--------|----------|-------------|
+| `GET` | `/projects` | All published projects (used by AI Voice Agent) |
+| `GET` | `/projects/:slug` | Project by slug |
 
-### Analytics Tracking (`/api/track`)
-
+### Files (`/api/files`)
 | Method | Endpoint | Description |
-| :--- | :--- | :--- |
-| `POST` | `/pageview` | Track a page view event |
-| `POST` | `/time` | Track time spent on page |
-| `POST` | `/cta` | Track CTA clicks (Call/WhatsApp) |
+|--------|----------|-------------|
+| `POST` | `/proxy-upload` | Upload file → R2, saves to project via `$push` |
 
-### Analytics Reporting (`/api/analytics`)
-
+### Analytics (`/api/track`, `/api/analytics`)
 | Method | Endpoint | Description |
-| :--- | :--- | :--- |
-| `GET` | `/overview` | Get system-wide analytics overview |
-| `GET` | `/projects/:projectId` | Get aggregated analytics for a project |
+|--------|----------|-------------|
+| `POST` | `/track/pageview` | Track page view |
+| `POST` | `/track/time` | Track time spent |
+| `POST` | `/track/cta` | Track CTA click |
+| `GET` | `/analytics/overview` | System-wide overview |
+| `GET` | `/analytics/projects/:id` | Per-project analytics |
 
+### Auth (`/api/auth`)
+Phone + MPIN login with MSG91 SMS OTP (DLT registration pending — see `.kiro/SESSION_CONTEXT.md`).
 
-## ⚙️ Configuration
+---
 
-- **PORT**: Defaults to `5001`.
-- **Database**: Requires a valid MongoDB connection string.
+## Deploy
 
-## 📂 Project Structure
+```bash
+gcloud run deploy sales-website-backend \
+  --source . \
+  --project homeintown-486304 \
+  --region asia-south1 \
+  --allow-unauthenticated \
+  --port 8080
+```
+
+---
+
+## Project Structure
 
 ```
-backend/
-├── config/
-│   ├── db.js             # Database connection logic
-│   └── index.js          # App-wide configuration
-├── controllers/          # Request handlers
-├── models/               # Mongoose schemas (Project, Visit, CallLog, etc.)
-├── repositories/         # Data access layer
-├── routes/               # API route definitions
-├── services/             # Business logic layer
-├── utils/                # Helper functions
-├── server.js             # Entry point
-└── package.json          # Dependencies
+HIT_Backend/
+├── config/          — DB connection, app config, R2 client
+├── controllers/     — Request handlers
+├── middleware/      — Auth, validation, rate limiter, error handler
+├── models/          — Mongoose schemas
+├── repositories/    — Data access layer (flatten for partial $set updates)
+├── routes/          — Express routers
+├── services/        — Business logic (MSG91, email, etc.)
+├── sockets/         — Socket.io event handlers
+├── utils/           — Helpers
+└── server.js        — Entry point
 ```
