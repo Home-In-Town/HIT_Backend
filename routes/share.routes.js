@@ -1,6 +1,7 @@
 const express = require('express');
 const { protect, restrictTo } = require('../middleware/auth');
 const ShareController = require('../controllers/shareController');
+const GalleryController = require('../controllers/galleryController');
 
 const router = express.Router();
 
@@ -15,6 +16,13 @@ router.post(
   protect,
   restrictTo('captain', 'agent', 'builder', 'admin'),
   (req, res) => ShareController.generateToken(req, res)
+);
+
+// Download project gallery as ZIP with contact details
+router.get(
+  '/gallery/:projectId',
+  protect,
+  (req, res) => GalleryController.downloadGallery(req, res)
 );
 
 // Get authenticated user's contact info (for PDF embedding on frontend)
