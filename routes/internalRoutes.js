@@ -190,20 +190,49 @@ router.post('/projects/:hitUserId', async (req, res) => {
     try {
         const { hitUserId } = req.params;
         const Project = require('../models/Project');
+        const slugify = require('../utils/slugify');
 
         const user = await User.findById(hitUserId);
         if (!user) {
             return res.status(404).json({ error: 'User not found' });
         }
 
+        const status = req.body.status || 'draft';
+
+        // ── Validation for publishing — same rules as HIT frontend ───────
+        if (status === 'published') {
+            const errors = [];
+            if (!req.body.projectName || !req.body.projectName.trim()) errors.push('Project name is required');
+            if (!req.body.category) errors.push('Category is required');
+            if (!req.body.city || !req.body.city.trim()) errors.push('City is required');
+            if (!req.body.location || !req.body.location.trim()) errors.push('Location / Area is required');
+            if (!req.body.projectType && !req.body.propertyType) errors.push('Property type is required');
+            if (!req.body.pricing?.startingPrice && !req.body.pricing?.pricePerSqFt) errors.push('At least one pricing field is required (Starting Price or Price Per Sq Ft)');
+            if (!req.body.cta?.whatsappNumber && !req.body.cta?.callNumber) errors.push('At least one contact number is required (WhatsApp or Call)');
+
+            if (errors.length > 0) {
+                return res.status(400).json({ error: 'Cannot publish — missing required fields', details: errors });
+            }
+        }
+
         const projectData = {
             ...req.body,
             owner: user._id,
-            status: 'draft',
+            status,
         };
 
+        // Generate slug for published projects (required for public visibility on homeintown.in)
+        if (status === 'published' && req.body.projectName) {
+            projectData.slug = slugify(req.body.projectName.trim());
+            // Check if slug already exists, append random suffix if collision
+            const existing = await Project.findOne({ slug: projectData.slug });
+            if (existing) {
+                projectData.slug = `${projectData.slug}-${Date.now().toString(36).slice(-4)}`;
+            }
+        }
+
         const project = await Project.create(projectData);
-        console.log(`✅ [Internal] Project created from OneEmployee: ${project.projectName} (${project._id}) for user ${user.name}`);
+        console.log(`✅ [Internal] Project created from OneEmployee: ${project.projectName} (${project._id}) status=${project.status} slug=${project.slug || 'none'} for user ${user.name}`);
 
         res.status(201).json({
             success: true,
@@ -215,6 +244,7 @@ router.post('/projects/:hitUserId', async (req, res) => {
                 location: project.location,
                 category: project.category,
                 status: project.status,
+                slug: project.slug,
                 createdAt: project.createdAt,
             }
         });
@@ -235,9 +265,39 @@ router.put('/projects/:hitUserId/:projectId', async (req, res) => {
     try {
         const { hitUserId, projectId } = req.params;
         const Project = require('../models/Project');
+        const slugify = require('../utils/slugify');
 
         const user = await User.findById(hitUserId);
         if (!user) return res.status(404).json({ error: 'User not found' });
+
+        // If status is being changed to 'published', validate and generate slug
+        if (req.body.status === 'published') {
+            const existingProject = await Project.findOne({ _id: projectId, owner: user._id }).lean();
+            if (!existingProject) return res.status(404).json({ error: 'Project not found' });
+
+            // Merge existing data with incoming update for validation
+            const merged = { ...existingProject, ...req.body };
+            const errors = [];
+            if (!merged.projectName || !merged.projectName.trim()) errors.push('Project name is required');
+            if (!merged.category) errors.push('Category is required');
+            if (!merged.city || !merged.city.trim()) errors.push('City is required');
+            if (!merged.location || !merged.location.trim()) errors.push('Location / Area is required');
+            if (!merged.pricing?.startingPrice && !merged.pricing?.pricePerSqFt) errors.push('At least one pricing field is required');
+            if (!merged.cta?.whatsappNumber && !merged.cta?.callNumber) errors.push('At least one contact number is required');
+
+            if (errors.length > 0) {
+                return res.status(400).json({ error: 'Cannot publish — missing required fields', details: errors });
+            }
+
+            // Generate slug if not already present
+            if (!existingProject.slug) {
+                req.body.slug = slugify((merged.projectName || '').trim());
+                const slugExists = await Project.findOne({ slug: req.body.slug, _id: { $ne: projectId } });
+                if (slugExists) {
+                    req.body.slug = `${req.body.slug}-${Date.now().toString(36).slice(-4)}`;
+                }
+            }
+        }
 
         const project = await Project.findOneAndUpdate(
             { _id: projectId, owner: user._id },
@@ -247,7 +307,7 @@ router.put('/projects/:hitUserId/:projectId', async (req, res) => {
 
         if (!project) return res.status(404).json({ error: 'Project not found or not owned by this user' });
 
-        console.log(`✅ [Internal] Project updated from OneEmployee: ${project.projectName} (${project._id})`);
+        console.log(`✅ [Internal] Project updated from OneEmployee: ${project.projectName} (${project._id}) status=${project.status}`);
         res.json({ success: true, project });
     } catch (error) {
         if (error.name === 'ValidationError') {
