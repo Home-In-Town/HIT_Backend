@@ -18,6 +18,7 @@
 const nlpExtractor = require('./NLPExtractor');
 const matchEngineV2 = require('./MatchEngineV2');
 const locationNormalizer = require('./LocationNormalizer');
+const conversationContext = require('./ConversationContext');
 const ExtractedLead = require('../models/ExtractedLead');
 const Notification = require('../models/Notification');
 const User = require('../models/User');
@@ -46,65 +47,127 @@ class LeadCaptureService {
     try {
       // Quick signal check first (cheap — avoids full extraction on irrelevant messages)
       if (!nlpExtractor.hasRequirementSignal(text)) {
-        return { extracted: false, lead: null, matches: [] };
+        return { extracted: false, leads: [], matches: [] };
       }
 
-      // Full NLP extraction
-      const extraction = nlpExtractor.extract(text, { role: sender.role });
-      if (!extraction) {
-        return { extracted: false, lead: null, matches: [] };
-      }
+      const senderId = sender._id.toString();
 
-      logger.info('Requirement detected', {
-        sender: sender.name,
+      // Get conversation context for follow-up resolution
+      const previousParams = conversationContext.getLatest(senderId, roomId);
+
+      // Try multi-requirement extraction first
+      const extractions = nlpExtractor.extractAll(text, {
         role: sender.role,
-        intent: extraction.intent,
-        confidence: extraction.confidence,
-        params: this._summarizeParams(extraction.params)
+        userId: senderId,
+        previousParams
       });
 
-      // Enrich location with canonical info
-      if (extraction.params.locationRaw) {
-        const normalized = locationNormalizer.normalize(extraction.params.locationRaw);
-        extraction.params.locationCanonical = normalized.canonical;
-        extraction.params.locationConfidence = normalized.confidence;
+      if (extractions.length === 0) {
+        // Single extraction fallback (handles follow-ups)
+        const single = nlpExtractor.extract(text, {
+          role: sender.role,
+          userId: senderId,
+          previousParams
+        });
+        if (!single) {
+          return { extracted: false, leads: [], matches: [] };
+        }
+        extractions.push(single);
       }
 
-      // Run MatchEngineV2
-      const matches = await matchEngineV2.findMatches(extraction.params, {
-        limit: 5,
-        excludeOwner: sender._id.toString(),
-        minScore: 25
-      });
+      // Process each extraction
+      const allLeads = [];
+      const allMatches = [];
 
-      // Persist the extracted lead (NO DATA LOSS — always save)
-      const lead = await this._persistLead({
-        extraction,
-        sender,
-        source,
-        messageId,
-        roomId,
-        matches
-      });
+      for (const extraction of extractions) {
+        logger.info('Requirement detected', {
+          sender: sender.name,
+          role: sender.role,
+          intent: extraction.intent,
+          confidence: extraction.confidence,
+          params: this._summarizeParams(extraction.params)
+        });
 
-      // Notify sender of matches (real-time via Socket.io)
-      if (matches.length > 0 && io) {
-        this._notifySender(io, sender, lead, matches, roomId, source);
+        // Enrich location
+        if (extraction.params.locationRaw) {
+          const normalized = locationNormalizer.normalize(extraction.params.locationRaw);
+          extraction.params.locationCanonical = normalized.canonical;
+          extraction.params.locationConfidence = normalized.confidence;
+        }
+
+        // Handle multi-location: run matching for each location
+        const locations = extraction.params.locations || [];
+        let matches = [];
+
+        if (locations.length > 1) {
+          // Multi-location: merge match results from each location
+          for (const loc of locations) {
+            const locParams = { ...extraction.params, location: loc, locationRaw: loc };
+            const locNorm = locationNormalizer.normalize(loc);
+            locParams.locationCanonical = locNorm.canonical;
+            locParams.locationConfidence = locNorm.confidence;
+
+            const locMatches = await matchEngineV2.findMatches(locParams, {
+              limit: 3,
+              excludeOwner: senderId,
+              minScore: 25
+            });
+            matches.push(...locMatches);
+          }
+          // Deduplicate by project ID, keep highest score
+          matches = this._deduplicateMatches(matches);
+          matches.sort((a, b) => b.score - a.score);
+          matches = matches.slice(0, 5);
+        } else {
+          // Single location
+          matches = await matchEngineV2.findMatches(extraction.params, {
+            limit: 5,
+            excludeOwner: senderId,
+            minScore: 25
+          });
+        }
+
+        // Persist lead
+        const lead = await this._persistLead({
+          extraction,
+          sender,
+          source,
+          messageId,
+          roomId,
+          matches
+        });
+
+        // Store in conversation context for future follow-ups
+        conversationContext.store(senderId, roomId, extraction.params, text);
+
+        allLeads.push(lead);
+        allMatches.push(...matches);
+
+        // Notify sender of matches
+        if (matches.length > 0 && io) {
+          this._notifySender(io, sender, lead, matches, roomId, source);
+        }
       }
 
-      // Notify admins
-      if (extraction.confidence >= 0.5 || matches.length > 0) {
-        await this._notifyAdmins(io, sender, lead, matches);
+      // Notify admins (once per message, summarizing all leads)
+      const bestExtraction = extractions[0];
+      if (bestExtraction.confidence >= 0.5 || allMatches.length > 0) {
+        await this._notifyAdmins(io, sender, allLeads[0], allMatches.slice(0, 5));
       }
 
       const elapsed = Date.now() - startTime;
       logger.info(`Lead capture completed in ${elapsed}ms`, {
-        leadId: lead._id,
-        matchCount: matches.length,
-        topScore: matches[0]?.score || 0
+        leadCount: allLeads.length,
+        matchCount: allMatches.length,
+        topScore: allMatches[0]?.score || 0
       });
 
-      return { extracted: true, lead, matches };
+      return {
+        extracted: true,
+        leads: allLeads,
+        lead: allLeads[0] || null, // backward compat
+        matches: allMatches
+      };
 
     } catch (err) {
       logger.error('LeadCapture processing error', {
@@ -314,6 +377,20 @@ class LeadCaptureService {
   }
 
   // ─── Helpers ────────────────────────────────────────────────────────────────
+
+  /**
+   * Deduplicate matches by project ID, keeping highest score.
+   */
+  _deduplicateMatches(matches) {
+    const seen = new Map();
+    for (const match of matches) {
+      const projId = match.project._id.toString();
+      if (!seen.has(projId) || seen.get(projId).score < match.score) {
+        seen.set(projId, match);
+      }
+    }
+    return Array.from(seen.values());
+  }
 
   _buildParamSummary(params) {
     const parts = [];
