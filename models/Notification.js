@@ -19,6 +19,7 @@ const notificationSchema = new mongoose.Schema({
       'marketplace_action',    // Someone acted on your listing
       'commission_update',     // Commission status changed
       'new_listing',           // New marketplace listing matching criteria
+      'lead_match',            // Auto-detected lead from chat with matching projects
       'system'                 // System notifications
     ],
     required: true
@@ -37,7 +38,7 @@ const notificationSchema = new mongoose.Schema({
   },
   // Reference to related entity
   reference: {
-    model: { type: String, enum: ['CrmLead', 'ChatSession', 'MarketplaceListing', 'MarketplaceAction', 'Project'] },
+    model: { type: String, enum: ['CrmLead', 'ChatSession', 'MarketplaceListing', 'MarketplaceAction', 'Project', 'ExtractedLead'] },
     id: { type: mongoose.Schema.Types.ObjectId }
   },
   // Read status

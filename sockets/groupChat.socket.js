@@ -1,6 +1,7 @@
 const GroupRoom = require('../models/GroupRoom');
 const GroupMessage = require('../models/GroupMessage');
 const matchEngine = require('../services/MatchEngine');
+const leadCaptureService = require('../services/LeadCaptureService');
 
 /**
  * Group Chat Socket Handler
@@ -159,6 +160,21 @@ module.exports = (io) => {
               score: m.score,
               matchedOn: m.matchedOn
             }))
+          });
+        }
+
+        // === NLP LEAD CAPTURE for text messages ===
+        // Detects requirement intent in free text, runs matching, notifies admin
+        if (messageType === 'text' && content && content.length >= 10) {
+          leadCaptureService.processMessage({
+            text: content,
+            sender: { _id: socket.user._id, name: socket.user.name, role: socket.user.role },
+            source: 'group_chat',
+            messageId: message._id,
+            roomId,
+            io
+          }).catch(err => {
+            console.error('LeadCapture (Socket) non-blocking error:', err.message);
           });
         }
 
