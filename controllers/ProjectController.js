@@ -1,6 +1,7 @@
 const ProjectService = require('../services/ProjectService');
 const User = require('../models/User');
 const Project = require('../models/Project');
+const reverseMatchService = require('../services/ReverseMatchService');
 
 /**
  * Fire-and-forget: Notify OneEmployee of project changes for linked users.
@@ -133,6 +134,16 @@ class ProjectController {
   async publish(req, res) {
     try {
       const project = await ProjectService.publishProject(req.params.projectId);
+
+      // Fire-and-forget: run reverse matching against recent leads
+      const fullProject = await Project.findById(project._id)
+        .populate('owner', 'name companyName role verificationStatus')
+        .lean();
+      const io = req.app.get('io');
+      reverseMatchService.onProjectPublished(fullProject, io).catch(err => {
+        console.error('ReverseMatch (publish) non-blocking error:', err.message);
+      });
+
       res.json(project);
     } catch (error) {
       if (error.message === 'Project not found') {
