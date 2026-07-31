@@ -5,6 +5,7 @@ const ChatSession = require('../models/ChatSession');
 const Notification = require('../models/Notification');
 const Project = require('../models/Project');
 const matchEngine = require('../services/MatchEngine');
+const leadCaptureService = require('../services/LeadCaptureService');
 
 // ═══════════════════════════════════════════════════════════
 // GROUP ROOMS
@@ -296,6 +297,23 @@ exports.postMessage = async (req, res) => {
           requirement: requirementCard
         });
       }
+    }
+
+    // === NLP LEAD CAPTURE for text messages ===
+    // Runs async — detects requirement intent in free text, matches, notifies admin
+    if (messageType === 'text' && content && content.length >= 10) {
+      // Non-blocking: fire and forget (don't delay the response)
+      const io = req.app.get('io');
+      leadCaptureService.processMessage({
+        text: content,
+        sender: { _id: userId, name: req.user.name, role: req.user.role },
+        source: 'group_chat',
+        messageId: message._id,
+        roomId,
+        io
+      }).catch(err => {
+        console.error('LeadCapture (REST) non-blocking error:', err.message);
+      });
     }
 
     res.status(201).json({ message });
