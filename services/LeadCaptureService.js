@@ -143,10 +143,10 @@ class LeadCaptureService {
         allLeads.push(lead);
         allMatches.push(...matches);
 
-        // Notify sender of matches
-        if (matches.length > 0 && io) {
-          this._notifySender(io, sender, lead, matches, roomId, source);
-        }
+        // Notify sender of matches (DISABLED — agents don't know about lead matching yet)
+        // if (matches.length > 0 && io) {
+        //   this._notifySender(io, sender, lead, matches, roomId, source);
+        // }
       }
 
       // Notify admins (once per message, summarizing all leads)
