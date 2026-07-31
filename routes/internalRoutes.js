@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const User = require('../models/User');
+const reverseMatchService = require('../services/ReverseMatchService');
 
 // Middleware to verify internal secret
 const verifyInternalSecret = (req, res, next) => {
@@ -234,6 +235,17 @@ router.post('/projects/:hitUserId', async (req, res) => {
         const project = await Project.create(projectData);
         console.log(`✅ [Internal] Project created from OneEmployee: ${project.projectName} (${project._id}) status=${project.status} slug=${project.slug || 'none'} for user ${user.name}`);
 
+        // Fire-and-forget: reverse match if published
+        if (project.status === 'published') {
+          const fullProject = await Project.findById(project._id)
+            .populate('owner', 'name companyName role verificationStatus')
+            .lean();
+          const io = req.app.get('io');
+          reverseMatchService.onProjectPublished(fullProject, io).catch(err => {
+            console.error('ReverseMatch (internal create) non-blocking error:', err.message);
+          });
+        }
+
         res.status(201).json({
             success: true,
             project: {
@@ -308,6 +320,18 @@ router.put('/projects/:hitUserId/:projectId', async (req, res) => {
         if (!project) return res.status(404).json({ error: 'Project not found or not owned by this user' });
 
         console.log(`✅ [Internal] Project updated from OneEmployee: ${project.projectName} (${project._id}) status=${project.status}`);
+
+        // Fire-and-forget: reverse match if status changed to published
+        if (req.body.status === 'published') {
+          const fullProject = await Project.findById(project._id)
+            .populate('owner', 'name companyName role verificationStatus')
+            .lean();
+          const io = req.app.get('io');
+          reverseMatchService.onProjectPublished(fullProject, io).catch(err => {
+            console.error('ReverseMatch (internal update) non-blocking error:', err.message);
+          });
+        }
+
         res.json({ success: true, project });
     } catch (error) {
         if (error.name === 'ValidationError') {
