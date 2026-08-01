@@ -24,7 +24,7 @@ const Logger = require('../utils/logger');
 const logger = new Logger('ReverseMatch');
 
 // How far back to look for matching leads
-const LOOKBACK_DAYS = 7;
+const LOOKBACK_DAYS = 15;
 // Minimum score to consider a reverse match valid
 const MIN_REVERSE_SCORE = 35;
 // Max leads to check per project publish (performance guard)
