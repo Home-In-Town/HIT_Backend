@@ -140,6 +140,7 @@ router.get('/leads', protect, async (req, res) => {
       ExtractedLead.find(filter)
         .populate('extractedBy', 'name role companyName')
         .populate('matches.project', 'projectName city location pricing configuration slug')
+        .populate('crossMatches.lead', 'originalText params extractedBy')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(parseInt(limit))

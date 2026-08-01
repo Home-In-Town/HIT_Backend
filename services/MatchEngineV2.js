@@ -14,6 +14,7 @@
  */
 
 const Project = require('../models/Project');
+const User = require('../models/User'); // Required for populate('owner')
 const locationNormalizer = require('./LocationNormalizer');
 const Logger = require('../utils/logger');
 const logger = new Logger('MatchEngineV2');
@@ -46,6 +47,7 @@ class MatchEngineV2 {
     try {
       // Build the MongoDB query
       const query = this._buildQuery(requirement, excludeOwner);
+      console.log('[MatchEngineV2 DEBUG] Query built:', JSON.stringify(query, null, 2));
 
       // Fetch candidate projects (wider net than final results)
       const projects = await Project.find(query)
