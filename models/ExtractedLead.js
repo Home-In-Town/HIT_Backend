@@ -82,7 +82,7 @@ const extractedLeadSchema = new mongoose.Schema({
   // ─── Extraction Quality ──────────────────────────────────────────────────
   intent: {
     type: String,
-    enum: ['requirement', 'implicit_requirement'],
+    enum: ['requirement', 'implicit_requirement', 'follow_up_requirement'],
     default: 'requirement'
   },
   extractionConfidence: {
