@@ -793,7 +793,7 @@ class NLPExtractor {
       const match = lowerText.match(regex);
       if (match) {
         const words = match[1].trim().split(/\s+/);
-        const noiseWords = ['ek', 'ik', 'mujhe', 'muje', 'flat', 'plot', 'villa', 'ghar', 'makan', 'chahiye', 'chaiye', 'koi', 'property', 'ek', 'do', 'teen'];
+        const noiseWords = ['ek', 'ik', 'mujhe', 'muje', 'flat', 'plot', 'villa', 'ghar', 'makan', 'chahiye', 'chaiye', 'koi', 'property', 'ek', 'do', 'teen', 'hai', 'hain', 'tha', 'thi', 'mere', 'paas', 'available'];
         // Filter out leading noise words, keep only location-meaningful words
         const cleanWords = [];
         let foundMeaningful = false;
@@ -836,7 +836,9 @@ class NLPExtractor {
     // Strategy 2: Check known locations anywhere in the text
     const knownMatch = locationNormalizer.normalize(lowerText);
     if (knownMatch.canonical && knownMatch.confidence >= 0.6) {
-      return knownMatch.originalCleaned;
+      // Return a clean display name: capitalize the canonical key
+      const displayName = knownMatch.canonical.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+      return displayName;
     }
 
     // Strategy 3: Capitalized phrases
@@ -923,11 +925,15 @@ class NLPExtractor {
       'urgent', 'ready', 'immediate', 'chahiye', 'pahije', 'lakh',
       'wala', 'wali', 'and', 'aur', 'or', 'ya',
       'tak', 'upto', 'under', 'within', 'mein', 'me', 'pe',
+      'for', 'sale', 'sell', 'selling', 'client', 'available',
+      'hai', 'hain', 'ka', 'ki', 'ke', 'se', 'per', 'acre',
+      'possession', 'ready', 'new', 'launch', 'bechna', 'bikau',
     ];
     const locationWords = [];
     for (const word of words) {
       if (stopWords.includes(word.toLowerCase())) break;
       if (/^\d+$/.test(word)) break;
+      if (/^\[.*\]$/.test(word)) continue; // skip [tags]
       locationWords.push(word);
     }
 
