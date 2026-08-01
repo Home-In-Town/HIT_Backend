@@ -19,6 +19,7 @@ const nlpExtractor = require('./NLPExtractor');
 const matchEngineV2 = require('./MatchEngineV2');
 const locationNormalizer = require('./LocationNormalizer');
 const conversationContext = require('./ConversationContext');
+const crossMatchService = require('./CrossMatchService');
 const ExtractedLead = require('../models/ExtractedLead');
 const Notification = require('../models/Notification');
 const User = require('../models/User');
@@ -75,6 +76,10 @@ class LeadCaptureService {
         extractions.push(single);
       }
 
+      // For admin users, don't exclude their own projects from matching
+      // (admin monitors all leads, they're not looking for themselves)
+      const excludeId = sender.role === 'admin' ? null : senderId;
+
       // Process each extraction
       const allLeads = [];
       const allMatches = [];
@@ -109,7 +114,7 @@ class LeadCaptureService {
 
             const locMatches = await matchEngineV2.findMatches(locParams, {
               limit: 3,
-              excludeOwner: senderId,
+              excludeOwner: excludeId,
               minScore: 25
             });
             matches.push(...locMatches);
@@ -122,9 +127,10 @@ class LeadCaptureService {
           // Single location
           matches = await matchEngineV2.findMatches(extraction.params, {
             limit: 5,
-            excludeOwner: senderId,
+            excludeOwner: excludeId,
             minScore: 25
           });
+          console.log('[LeadCapture DEBUG] Single-location match result:', matches.length, 'matches. Params:', JSON.stringify({ location: extraction.params.location, locationRaw: extraction.params.locationRaw, budget: extraction.params.budget, bhkType: extraction.params.bhkType }));
         }
 
         // Persist lead
@@ -143,13 +149,26 @@ class LeadCaptureService {
         allLeads.push(lead);
         allMatches.push(...matches);
 
+        // Cross-match: requirement ↔ inventory (lead-to-lead matching)
+        if (extraction.intent === 'inventory') {
+          // New inventory → find matching requirements
+          crossMatchService.matchInventoryToRequirements(lead, io).catch(err => {
+            console.error('CrossMatch (inv→req) non-blocking error:', err.message);
+          });
+        } else if (extraction.intent === 'requirement' || extraction.intent === 'implicit_requirement') {
+          // New requirement → find matching inventory leads
+          crossMatchService.matchRequirementToInventory(lead, io).catch(err => {
+            console.error('CrossMatch (req→inv) non-blocking error:', err.message);
+          });
+        }
+
         // Notify sender of matches (DISABLED — agents don't know about lead matching yet)
         // if (matches.length > 0 && io) {
         //   this._notifySender(io, sender, lead, matches, roomId, source);
         // }
       }
 
-      // Notify admins (once per message, summarizing all leads)
+      // Notify admin
       const bestExtraction = extractions[0];
       if (bestExtraction.confidence >= 0.5 || allMatches.length > 0) {
         await this._notifyAdmins(io, sender, allLeads[0], allMatches.slice(0, 5));
