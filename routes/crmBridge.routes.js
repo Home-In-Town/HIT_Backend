@@ -7,12 +7,11 @@ const { protect, restrictTo } = require('../middleware/auth');
 const crmAuth = [protect, restrictTo('admin', 'builder', 'agent', 'captain')];
 
 // ── Connection Management ────────────────────────────────────────────────────
-router.post('/link',              ...crmAuth, ctrl.link);
-router.post('/link-by-identifier', ...crmAuth, ctrl.linkByIdentifier);
-router.post('/unlink',            ...crmAuth, ctrl.unlink);
+router.get('/status',              protect,    ctrl.status);
 router.post('/auto-link',         ...crmAuth, ctrl.autoLink);
-router.post('/create-account',    ...crmAuth, ctrl.createAccount);
-router.get('/status',             protect,    ctrl.status);
+router.post('/link',              ...crmAuth, ctrl.link);
+router.post('/manual-connect',    ...crmAuth, ctrl.manualConnect);     // PIN-verified connect
+router.post('/unlink',            ...crmAuth, ctrl.unlink);
 router.get('/redirect-base',      protect,    ctrl.getRedirectBase);
 
 // ── CRM Data ─────────────────────────────────────────────────────────────────
