@@ -178,6 +178,38 @@ module.exports = (io) => {
           });
         }
 
+        // === LEAD CAPTURE for requirement_card forms ===
+        if (messageType === 'requirement_card' && requirementCard) {
+          const budgetInLakhs = requirementCard.budget > 10000 ? Math.round(requirementCard.budget / 100000) : requirementCard.budget;
+          const reqText = `need ${requirementCard.bhkType || ''} ${requirementCard.area || ''} ${requirementCard.city || ''} ${budgetInLakhs ? budgetInLakhs + 'L' : ''} ${requirementCard.possessionNeeded || ''} ${requirementCard.loanRequired ? 'loan required' : ''}`.trim();
+          leadCaptureService.processMessage({
+            text: reqText,
+            sender: { _id: socket.user._id, name: socket.user.name, role: socket.user.role },
+            source: 'group_chat',
+            messageId: message._id,
+            roomId,
+            io
+          }).catch(err => {
+            console.error('LeadCapture (requirement_card socket) non-blocking error:', err.message);
+          });
+        }
+
+        // === LEAD CAPTURE for inventory_card forms ===
+        if (messageType === 'inventory_card' && inventoryCard) {
+          const invBudgetInLakhs = inventoryCard.priceRange?.min > 10000 ? Math.round(inventoryCard.priceRange.min / 100000) : (inventoryCard.priceRange?.min || '');
+          const invText = `I have ${inventoryCard.bhkOptions?.join('/') || ''} flat ${inventoryCard.area || ''} ${inventoryCard.city || ''} ${invBudgetInLakhs ? invBudgetInLakhs + 'L' : ''} ${inventoryCard.possessionStatus || ''} ${inventoryCard.bankLoanAvailable ? 'loan available' : ''}`.trim();
+          leadCaptureService.processMessage({
+            text: invText,
+            sender: { _id: socket.user._id, name: socket.user.name, role: socket.user.role },
+            source: 'group_chat',
+            messageId: message._id,
+            roomId,
+            io
+          }).catch(err => {
+            console.error('LeadCapture (inventory_card socket) non-blocking error:', err.message);
+          });
+        }
+
       } catch (err) {
         console.error('group_send_message error:', err.message);
         socket.emit('error', { message: 'Failed to send group message' });

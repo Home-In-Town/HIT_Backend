@@ -25,7 +25,7 @@ const Logger = require('../utils/logger');
 const logger = new Logger('CrossMatch');
 
 // How far back to look for matching leads
-const LOOKBACK_DAYS = 7;
+const LOOKBACK_DAYS = 15;
 const MAX_RESULTS = 5;
 const MIN_SCORE = 30;
 
