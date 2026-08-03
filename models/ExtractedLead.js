@@ -82,7 +82,7 @@ const extractedLeadSchema = new mongoose.Schema({
   // ─── Extraction Quality ──────────────────────────────────────────────────
   intent: {
     type: String,
-    enum: ['requirement', 'implicit_requirement'],
+    enum: ['requirement', 'implicit_requirement', 'follow_up_requirement'],
     default: 'requirement'
   },
   extractionConfidence: {
@@ -126,7 +126,7 @@ const extractedLeadSchema = new mongoose.Schema({
   // ─── Expiry ──────────────────────────────────────────────────────────────
   expiresAt: {
     type: Date,
-    default: () => new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) // 7 days
+    default: () => new Date(Date.now() + 15 * 24 * 60 * 60 * 1000) // 15 days
   }
 }, {
   timestamps: true
