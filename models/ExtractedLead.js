@@ -136,7 +136,7 @@ const extractedLeadSchema = new mongoose.Schema({
   // ─── Expiry ──────────────────────────────────────────────────────────────
   expiresAt: {
     type: Date,
-    default: () => new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) // 7 days
+    default: () => new Date(Date.now() + 15 * 24 * 60 * 60 * 1000) // 15 days
   }
 }, {
   timestamps: true
