@@ -82,7 +82,7 @@ const extractedLeadSchema = new mongoose.Schema({
   // ─── Extraction Quality ──────────────────────────────────────────────────
   intent: {
     type: String,
-    enum: ['requirement', 'implicit_requirement', 'follow_up_requirement'],
+    enum: ['requirement', 'implicit_requirement', 'follow_up_requirement', 'inventory'],
     default: 'requirement'
   },
   extractionConfidence: {
@@ -100,6 +100,16 @@ const extractedLeadSchema = new mongoose.Schema({
   matches: [matchResultSchema],
   matchCount: { type: Number, default: 0 },
   bestMatchScore: { type: Number, default: 0 },
+
+  // ─── Cross-Match Results (lead-to-lead matching) ─────────────────────────
+  crossMatches: [{
+    lead: { type: mongoose.Schema.Types.ObjectId, ref: 'ExtractedLead' },
+    score: { type: Number },
+    matchedOn: [String],
+    matchType: { type: String, enum: ['inventory', 'requirement'] }
+  }],
+  crossMatchCount: { type: Number, default: 0 },
+  bestCrossMatchScore: { type: Number, default: 0 },
 
   // ─── Lead Status ─────────────────────────────────────────────────────────
   status: {

@@ -62,6 +62,28 @@ const NEGATIVE_INTENT_PATTERNS = [
 ];
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// INVENTORY INTENT DETECTION — "I have", "available", "mere paas hai"
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const INVENTORY_INTENT_PATTERNS = [
+  // English
+  /\b(i\s+have|we\s+have|have\s+a)\b/i,
+  /\b(available|for\s+sale|selling)\b/i,
+  /\b(offering|on\s+offer|listed)\b/i,
+  /\b(new\s+project|new\s+launch|inventory)\b/i,
+  /\b(ready\s+to\s+sell|want\s+to\s+sell)\b/i,
+  // Hindi
+  /\b(mere\s+paas|hamare\s+paas|humare\s+paas)\b/i,
+  /\b(available\s+hai|mil\s+jayega|mil\s+sakta)\b/i,
+  /\b(bechna\s+hai|bech\s+raha|bikau)\b/i,
+  /\b(dena\s+hai|de\s+sakte|de\s+rahe)\b/i,
+  /\b(hai\s+mere\s+paas|hai\s+humare\s+paas)\b/i,
+  // Marathi
+  /\b(aahe\s+mazya\s+kade|aahe\s+amchya\s+kade)\b/i,
+  /\b(vikaycha\s+aahe|vikne\s+aahe)\b/i,
+];
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // BHK EXTRACTION — Multi-Language
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -191,14 +213,21 @@ const URGENCY_PATTERNS = {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const LOCATION_INDICATORS = [
-  // English
+  // English (prepositions — location comes AFTER these)
   'near', 'in', 'at', 'around', 'beside', 'behind', 'opposite',
   'close to', 'next to', 'area', 'locality', 'location',
-  // Hindi
-  'ke paas', 'ke pass', 'ke aas paas', 'mein', 'me', 'pe',
+  // Hindi prepositions (location comes AFTER)
+  'ke paas', 'ke pass', 'ke aas paas',
   'ke piche', 'ke samne', 'ke bagal', 'wale area',
-  // Marathi
+  // Marathi prepositions (location comes AFTER)
   'joval', 'javal', 'madhye', 'pasun',
+];
+
+// Hindi/Marathi postpositions — location comes BEFORE these
+// E.g., "Besa mein", "Manish Nagar pe", "Wardha Road me"
+const LOCATION_POSTPOSITIONS = [
+  'mein', 'me', 'pe', 'par', 'ka', 'ki', 'ke',
+  'madhe', 'madhye', 'la',  // Marathi
 ];
 
 // Multi-location separator patterns
@@ -312,6 +341,23 @@ class NLPExtractor {
 
     // Detect intent
     const intentResult = this._detectIntent(cleanedText);
+
+    // Handle inventory intent: "I have a flat in Koradi 45L"
+    if (intentResult.isInventory) {
+      const params = this._extractAllParams(cleanedText);
+      const paramCount = this._countValidParams(params);
+      if (paramCount >= 2) {
+        if (context.userId) _markAsSeen(context.userId, cleanedText);
+        const rawConfidence = intentResult.confidence + (paramCount * 0.1);
+        return {
+          intent: 'inventory',
+          confidence: this._calibrateConfidence(rawConfidence, params),
+          params,
+          extractedFrom: cleanedText
+        };
+      }
+    }
+
     if (!intentResult.isRequirement) {
       // Implicit: if ≥3 params found without intent keywords
       const params = this._extractAllParams(cleanedText);
@@ -406,14 +452,16 @@ class NLPExtractor {
 
   /**
    * Quick signal check — cheaper than full extraction.
+   * Returns true for BOTH requirement and inventory signals.
    */
   hasRequirementSignal(text) {
     if (!text || text.length < 8) return false;
-    const hasIntent = REQUIREMENT_INTENT_PATTERNS.some(p => p.test(text));
+    const hasReqIntent = REQUIREMENT_INTENT_PATTERNS.some(p => p.test(text));
+    const hasInvIntent = INVENTORY_INTENT_PATTERNS.some(p => p.test(text));
     const hasBhk = BHK_PATTERNS.some(p => p.test(text));
     const hasBudget = BUDGET_PATTERNS.some(p => p.test(text)) ||
                       BUDGET_RANGE_PATTERNS.some(p => p.test(text));
-    return hasIntent || (hasBhk && hasBudget);
+    return hasReqIntent || hasInvIntent || (hasBhk && hasBudget);
   }
 
   /**
@@ -428,20 +476,35 @@ class NLPExtractor {
   // ═══════════════════════════════════════════════════════════════════════════
 
   _detectIntent(text) {
-    let maxConfidence = 0;
+    let reqConfidence = 0;
+    let invConfidence = 0;
 
+    // Check requirement intent
     for (const pattern of REQUIREMENT_INTENT_PATTERNS) {
       if (pattern.test(text)) {
         let confidence = 0.5;
-        // Higher confidence for explicit phrases
         if (/\b(looking\s+for|need|require|want|chahiye|pahije)\b/i.test(text)) confidence = 0.6;
         if (/\b(client\s+(needs?|wants?|ka\s+requirement))\b/i.test(text)) confidence = 0.75;
         if (/\b(lena\s+hai|kharidna\s+hai|ghyaycha)\b/i.test(text)) confidence = 0.7;
-        maxConfidence = Math.max(maxConfidence, confidence);
+        reqConfidence = Math.max(reqConfidence, confidence);
       }
     }
 
-    return { isRequirement: maxConfidence > 0, confidence: maxConfidence };
+    // Check inventory intent
+    for (const pattern of INVENTORY_INTENT_PATTERNS) {
+      if (pattern.test(text)) {
+        let confidence = 0.5;
+        if (/\b(i\s+have|we\s+have|mere\s+paas|available)\b/i.test(text)) confidence = 0.65;
+        if (/\b(for\s+sale|selling|bechna\s+hai|want\s+to\s+sell)\b/i.test(text)) confidence = 0.7;
+        invConfidence = Math.max(invConfidence, confidence);
+      }
+    }
+
+    // If both detected, pick the stronger one
+    if (invConfidence > reqConfidence) {
+      return { isRequirement: false, isInventory: true, confidence: invConfidence };
+    }
+    return { isRequirement: reqConfidence > 0, isInventory: false, confidence: reqConfidence };
   }
 
   _hasNegativeIntent(text) {
@@ -723,10 +786,45 @@ class NLPExtractor {
   _extractLocationRaw(text) {
     const lowerText = text.toLowerCase();
 
-    // Strategy 1: Find text after location indicator words
+    // Strategy 0: Hindi/Marathi postpositions — location comes BEFORE
+    // "Besa me", "Manish Nagar mein", "Wardha Road pe"
+    for (const postp of LOCATION_POSTPOSITIONS) {
+      const regex = new RegExp(`([a-z]+(?:\\s+[a-z]+){0,2})\\s+${postp}\\b`, 'i');
+      const match = lowerText.match(regex);
+      if (match) {
+        const words = match[1].trim().split(/\s+/);
+        const noiseWords = ['ek', 'ik', 'mujhe', 'muje', 'flat', 'plot', 'villa', 'ghar', 'makan', 'chahiye', 'chaiye', 'koi', 'property', 'ek', 'do', 'teen', 'hai', 'hain', 'tha', 'thi', 'mere', 'paas', 'available'];
+        // Filter out leading noise words, keep only location-meaningful words
+        const cleanWords = [];
+        let foundMeaningful = false;
+        for (let i = words.length - 1; i >= 0; i--) {
+          if (noiseWords.includes(words[i])) {
+            if (foundMeaningful) break; // Stop adding once we hit noise after location
+            continue; // Skip leading noise
+          }
+          foundMeaningful = true;
+          cleanWords.unshift(words[i]);
+        }
+        
+        if (cleanWords.length > 0) {
+          const candidate = cleanWords.join(' ');
+          if (candidate.length >= 3) {
+            const norm = locationNormalizer.normalize(candidate);
+            if (norm.canonical && norm.confidence >= 0.7) {
+              return candidate;
+            }
+          }
+        }
+      }
+    }
+
+    // Strategy 1: Find text after location indicator words (English prepositions)
     for (const indicator of LOCATION_INDICATORS) {
-      const idx = lowerText.indexOf(indicator);
-      if (idx !== -1) {
+      // Use word boundary match to avoid matching inside other words (e.g., "at" inside "flat")
+      const indicatorRegex = new RegExp(`\\b${indicator}\\b`, 'i');
+      const match = lowerText.match(indicatorRegex);
+      if (match) {
+        const idx = match.index;
         const afterIndicator = text.substring(idx + indicator.length).trim();
         const locationCandidate = this._extractLocationPhrase(afterIndicator);
         if (locationCandidate && locationCandidate.length >= 3) {
@@ -735,10 +833,12 @@ class NLPExtractor {
       }
     }
 
-    // Strategy 2: Check known locations in the text
+    // Strategy 2: Check known locations anywhere in the text
     const knownMatch = locationNormalizer.normalize(lowerText);
     if (knownMatch.canonical && knownMatch.confidence >= 0.6) {
-      return knownMatch.originalCleaned;
+      // Return a clean display name: capitalize the canonical key
+      const displayName = knownMatch.canonical.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+      return displayName;
     }
 
     // Strategy 3: Capitalized phrases
@@ -824,11 +924,16 @@ class NLPExtractor {
       'budget', 'price', 'bhk', 'flat', 'plot', 'villa', 'loan',
       'urgent', 'ready', 'immediate', 'chahiye', 'pahije', 'lakh',
       'wala', 'wali', 'and', 'aur', 'or', 'ya',
+      'tak', 'upto', 'under', 'within', 'mein', 'me', 'pe',
+      'for', 'sale', 'sell', 'selling', 'client', 'available',
+      'hai', 'hain', 'ka', 'ki', 'ke', 'se', 'per', 'acre',
+      'possession', 'ready', 'new', 'launch', 'bechna', 'bikau',
     ];
     const locationWords = [];
     for (const word of words) {
       if (stopWords.includes(word.toLowerCase())) break;
       if (/^\d+$/.test(word)) break;
+      if (/^\[.*\]$/.test(word)) continue; // skip [tags]
       locationWords.push(word);
     }
 

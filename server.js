@@ -184,6 +184,27 @@ const startServer = async () => {
       });
     }
 
+    // Load dynamic locations from published projects
+    try {
+      const locationNormalizer = require('./services/LocationNormalizer');
+      const result = await locationNormalizer.loadFromProjects();
+      logger.info(`Location map loaded: ${result.added} new locations, ${result.total} total aliases`);
+
+      // Refresh every 6 hours
+      setInterval(async () => {
+        try {
+          const r = await locationNormalizer.loadFromProjects();
+          if (r.added > 0) logger.info(`Location map refreshed: ${r.added} new locations added`);
+        } catch (err) {
+          logger.warn('Location refresh failed (non-critical)', { error: err.message });
+        }
+      }, 6 * 60 * 60 * 1000);
+    } catch (locError) {
+      logger.warn('Failed to load dynamic locations (non-critical)', {
+        error: locError.message,
+      });
+    }
+
     // Create HTTP server and attach Socket.io
     const server = http.createServer(app);
     const io = new Server(server, {

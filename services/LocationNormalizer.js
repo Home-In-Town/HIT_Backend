@@ -456,6 +456,174 @@ class LocationNormalizer {
   _toRad(deg) {
     return deg * (Math.PI / 180);
   }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // DYNAMIC LOCATION LEARNING — Auto-builds from published projects
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Load locations from published projects in the DB.
+   * Call this on server start and periodically (every 6 hours).
+   * 
+   * For each project location, generates:
+   *   - Canonical key (lowercase, underscores)
+   *   - Aliases: original, no-space version, with "road", with "nagar" stripped/kept
+   *   - Coordinates from project lat/lng
+   *   - Adds to protected compound words list
+   * 
+   * Existing hardcoded locations are NOT overwritten (they have hand-tuned aliases).
+   */
+  async loadFromProjects() {
+    try {
+      const Project = require('../models/Project');
+      const projects = await Project.find({ status: 'published', location: { $exists: true, $ne: '' } })
+        .select('location city latitude longitude')
+        .lean();
+
+      let added = 0;
+
+      for (const project of projects) {
+        const location = project.location?.trim();
+        if (!location || location.length < 2) continue;
+
+        const canonical = this._generateCanonical(location);
+        if (!canonical) continue;
+
+        // Skip if already in hardcoded map
+        if (LOCATION_ALIASES[location.toLowerCase()] || LOCATION_COORDS[canonical]) continue;
+
+        // Generate aliases for this location
+        const aliases = this._generateAliases(location, canonical);
+
+        // Add aliases to the map
+        for (const alias of aliases) {
+          if (!LOCATION_ALIASES[alias]) {
+            LOCATION_ALIASES[alias] = canonical;
+          }
+        }
+
+        // Add coordinates
+        if (project.latitude && project.longitude && !LOCATION_COORDS[canonical]) {
+          LOCATION_COORDS[canonical] = { lat: project.latitude, lng: project.longitude };
+        }
+
+        // Add to protected compound words
+        const lowerLoc = location.toLowerCase();
+        if (!PROTECTED_COMPOUND_WORDS.includes(lowerLoc)) {
+          PROTECTED_COMPOUND_WORDS.push(lowerLoc);
+        }
+
+        // Update reverse map
+        if (!CANONICAL_TO_ALIASES[canonical]) {
+          CANONICAL_TO_ALIASES[canonical] = [];
+        }
+        for (const alias of aliases) {
+          if (!CANONICAL_TO_ALIASES[canonical].includes(alias)) {
+            CANONICAL_TO_ALIASES[canonical].push(alias);
+          }
+        }
+
+        added++;
+      }
+
+      logger.info(`Dynamic location loading complete`, {
+        projectsScanned: projects.length,
+        newLocationsAdded: added,
+        totalAliases: Object.keys(LOCATION_ALIASES).length,
+        totalCanonicals: Object.keys(LOCATION_COORDS).length
+      });
+
+      return { added, total: Object.keys(LOCATION_ALIASES).length };
+    } catch (err) {
+      logger.error('Failed to load locations from projects', { error: err.message });
+      return { added: 0, total: Object.keys(LOCATION_ALIASES).length };
+    }
+  }
+
+  /**
+   * Generate a canonical key from a location string.
+   * "Manish Nagar" → "manish_nagar"
+   * "43WC+J2R, Dobhi Nagar, Civil Lines" → "dobhi_nagar_civil_lines"
+   */
+  _generateCanonical(location) {
+    let text = location.toLowerCase().trim();
+
+    // Remove plus codes (e.g., "43WC+J2R")
+    text = text.replace(/[A-Za-z0-9]{4}\+[A-Za-z0-9]{2,3},?\s*/g, '');
+
+    // Remove pin codes
+    text = text.replace(/\b\d{6}\b/g, '');
+
+    // Remove state/country suffixes
+    text = text.replace(/,?\s*(maharashtra|india|mh)\s*$/i, '');
+
+    // Remove city if it's just the city name alone
+    text = text.replace(/,?\s*(nagpur|mumbai|pune|delhi|bangalore|hyderabad)\s*$/i, '');
+
+    // Clean punctuation
+    text = text.replace(/[,.'"\/#!$%\^&\*;:{}=`~()]/g, ' ');
+    text = text.replace(/\s+/g, ' ').trim();
+
+    if (text.length < 2) return null;
+
+    // Convert to canonical: spaces → underscores
+    return text.replace(/\s+/g, '_');
+  }
+
+  /**
+   * Generate common aliases/variations for a location.
+   * "Civil Lines" → ["civil lines", "civillines", "civil line"]
+   * "Wardha Road" → ["wardha road", "wardha rd", "wardha"]
+   */
+  _generateAliases(location, canonical) {
+    const lower = location.toLowerCase().trim();
+    const aliases = new Set();
+
+    // Original lowercase
+    aliases.add(lower);
+
+    // No-space version: "civil lines" → "civillines"
+    aliases.add(lower.replace(/\s+/g, ''));
+
+    // Without "road/rd" suffix
+    const withoutRoad = lower.replace(/\s*(road|rd)\s*$/i, '').trim();
+    if (withoutRoad.length >= 3 && withoutRoad !== lower) {
+      aliases.add(withoutRoad);
+    }
+
+    // Without "nagar" suffix (but keep compound names like "manish nagar")
+    const words = lower.split(/\s+/);
+    if (words.length >= 2 && words[words.length - 1] === 'nagar') {
+      aliases.add(words.slice(0, -1).join(' ')); // Without nagar
+    }
+
+    // With "road" added: "wardha" → "wardha road"
+    if (!lower.includes('road') && !lower.includes('rd') && !lower.includes('nagar')) {
+      aliases.add(lower + ' road');
+    }
+
+    // Singular/plural: "civil lines" → "civil line"
+    if (lower.endsWith('s') && lower.length > 4) {
+      aliases.add(lower.slice(0, -1));
+    }
+
+    // From canonical back to space-separated
+    aliases.add(canonical.replace(/_/g, ' '));
+
+    return [...aliases].filter(a => a.length >= 3);
+  }
+
+  /**
+   * Get stats about the location map.
+   */
+  getStats() {
+    return {
+      totalAliases: Object.keys(LOCATION_ALIASES).length,
+      totalCanonicals: Object.keys(CANONICAL_TO_ALIASES).length,
+      totalCoords: Object.keys(LOCATION_COORDS).length,
+      protectedWords: PROTECTED_COMPOUND_WORDS.length
+    };
+  }
 }
 
 module.exports = new LocationNormalizer();
