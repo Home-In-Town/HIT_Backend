@@ -163,20 +163,9 @@ module.exports = (io) => {
           });
         }
 
-        // === NLP LEAD CAPTURE for text messages ===
-        // Detects requirement intent in free text, runs matching, notifies admin
-        if (messageType === 'text' && content && content.length >= 10) {
-          leadCaptureService.processMessage({
-            text: content,
-            sender: { _id: socket.user._id, name: socket.user.name, role: socket.user.role },
-            source: 'group_chat',
-            messageId: message._id,
-            roomId,
-            io
-          }).catch(err => {
-            console.error('LeadCapture (Socket) non-blocking error:', err.message);
-          });
-        }
+        // === NLP LEAD CAPTURE ===
+        // Text messages: handled by frontend confirmation modal (not here anymore).
+        // Only requirement_card and inventory_card processed here.
 
         // === LEAD CAPTURE for requirement_card forms ===
         if (messageType === 'requirement_card' && requirementCard) {

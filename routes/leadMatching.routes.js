@@ -96,9 +96,67 @@ router.post('/test-match', protect, async (req, res) => {
   }
 });
 
-// ═══════════════════════════════════════════════════════════
-// EXTRACTED LEADS — ADMIN / CAPTAIN DASHBOARD
-// ═══════════════════════════════════════════════════════════
+/**
+ * POST /api/lead-matching/confirm
+ * User-confirmed lead — takes corrected params, runs full matching, saves lead.
+ * Called from frontend after user reviews and confirms the extraction modal.
+ * 
+ * Body: {
+ *   originalText: string,      // the original message text
+ *   messageId: string,         // the group message _id
+ *   roomId: string,            // the group room _id
+ *   source: 'group_chat',
+ *   intent: 'requirement' | 'inventory',
+ *   params: {
+ *     bhkType, budget, budgetMax, location, locationRaw,
+ *     city, propertyType, possessionNeeded, loanRequired, urgency
+ *   }
+ * }
+ */
+router.post('/confirm', protect, async (req, res) => {
+  try {
+    const { originalText, messageId, roomId, source, intent, params } = req.body;
+
+    if (!params || !roomId) {
+      return res.status(400).json({ error: 'params and roomId are required' });
+    }
+
+    const result = await leadCaptureService.processWithParams({
+      originalText: originalText || '',
+      params,
+      intent: intent || 'requirement',
+      sender: { _id: req.user._id, name: req.user.name, role: req.user.role },
+      source: source || 'group_chat',
+      messageId,
+      roomId,
+      io: req.app.get('io')
+    });
+
+    return res.json({
+      success: true,
+      lead: result.lead,
+      matches: result.matches?.map(m => ({
+        project: {
+          _id: m.project._id,
+          projectName: m.project.projectName,
+          city: m.project.city,
+          location: m.project.location,
+          pricing: m.project.pricing,
+          configuration: m.project.configuration,
+          slug: m.project.slug
+        },
+        score: m.score,
+        matchedOn: m.matchedOn
+      })) || [],
+      matchCount: result.matches?.length || 0
+    });
+  } catch (err) {
+    console.error('confirm error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
 
 /**
  * GET /api/lead-matching/leads

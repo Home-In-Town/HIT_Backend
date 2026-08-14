@@ -299,22 +299,10 @@ exports.postMessage = async (req, res) => {
       }
     }
 
-    // === NLP LEAD CAPTURE for text messages ===
-    // Runs async — detects requirement intent in free text, matches, notifies admin
-    if (messageType === 'text' && content && content.length >= 10) {
-      // Non-blocking: fire and forget (don't delay the response)
-      const io = req.app.get('io');
-      leadCaptureService.processMessage({
-        text: content,
-        sender: { _id: userId, name: req.user.name, role: req.user.role },
-        source: 'group_chat',
-        messageId: message._id,
-        roomId,
-        io
-      }).catch(err => {
-        console.error('LeadCapture (REST) non-blocking error:', err.message);
-      });
-    }
+    // === LEAD CAPTURE ===
+    // For text messages: frontend now drives this via the confirmation modal.
+    // For requirement_card and inventory_card: still handled via form integration below.
+    // NOTE: Text message lead capture removed from here — frontend calls /confirm endpoint.
 
     // === LEAD CAPTURE for requirement_card forms ===
     if (messageType === 'requirement_card' && requirementCard) {
