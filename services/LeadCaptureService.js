@@ -200,6 +200,62 @@ class LeadCaptureService {
   }
 
   /**
+   * Process a lead with user-confirmed/corrected params (from modal).
+   * Skips NLP extraction — uses the params as provided by the user.
+   * Called from the /confirm endpoint.
+   */
+  async processWithParams({ originalText, params, intent, sender, source, messageId, roomId, io }) {
+    try {
+      const senderId = sender._id.toString();
+
+      // Enrich location
+      if (params.locationRaw) {
+        const normalized = locationNormalizer.normalize(params.locationRaw);
+        params.locationCanonical = normalized.canonical;
+        params.locationConfidence = normalized.confidence;
+      }
+
+      // Run MatchEngineV2 against published projects
+      const excludeId = sender.role === 'admin' ? null : senderId;
+      const matches = await matchEngineV2.findMatches(params, {
+        limit: 5,
+        excludeOwner: excludeId,
+        minScore: 25
+      });
+
+      // Persist the lead
+      const lead = await this._persistLead({
+        extraction: { intent, confidence: 1.0, params, extractedFrom: originalText },
+        sender,
+        source,
+        messageId,
+        roomId,
+        matches
+      });
+
+      // Store in conversation context
+      conversationContext.store(senderId, roomId, params, originalText);
+
+      // Cross-match
+      if (intent === 'inventory') {
+        crossMatchService.matchInventoryToRequirements(lead, io).catch(() => {});
+      } else {
+        crossMatchService.matchRequirementToInventory(lead, io).catch(() => {});
+      }
+
+      // Notify admins
+      if (matches.length > 0) {
+        await this._notifyAdmins(io, sender, lead, matches);
+      }
+
+      return { lead, matches };
+    } catch (err) {
+      logger.error('processWithParams error', { error: err.message });
+      return { lead: null, matches: [] };
+    }
+  }
+
+  /**
    * Test extraction only (for debug endpoint) — no DB writes, no notifications
    */
   extractOnly(text) {
