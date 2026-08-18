@@ -5,10 +5,13 @@ const { protect, restrictTo } = require('../middleware/auth');
 
 // All chat routes require authentication
 router.use(protect);
-router.use(restrictTo('admin', 'builder', 'agent'));
+router.use(restrictTo('admin', 'builder', 'agent', 'captain'));
 
 // Contacts list
 router.get('/contacts', chatController.getContacts);
+
+// Builder network — FOMO-powered builder directory
+router.get('/builders-network', chatController.getBuildersNetwork);
 
 // Pre-chat qualification & session creation
 router.post('/qualify', chatController.qualifyAndConnect);
