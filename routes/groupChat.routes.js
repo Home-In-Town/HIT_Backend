@@ -5,7 +5,7 @@ const { protect, restrictTo } = require('../middleware/auth');
 
 // All group chat routes require authentication
 router.use(protect);
-router.use(restrictTo('admin', 'builder', 'agent'));
+router.use(restrictTo('admin', 'builder', 'agent', 'captain', 'employee'));
 
 // ── Group Rooms ─────────────────────────────────────────
 router.post('/rooms', groupChatController.createRoom);

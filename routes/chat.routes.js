@@ -5,7 +5,7 @@ const { protect, restrictTo } = require('../middleware/auth');
 
 // All chat routes require authentication
 router.use(protect);
-router.use(restrictTo('admin', 'builder', 'agent', 'captain'));
+router.use(restrictTo('admin', 'builder', 'agent', 'captain', 'employee'));
 
 // Contacts list
 router.get('/contacts', chatController.getContacts);
