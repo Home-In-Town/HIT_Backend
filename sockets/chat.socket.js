@@ -39,6 +39,9 @@ module.exports = (io) => {
     // Join personal room for notifications
     socket.join(userId);
 
+    // Update lastSeen on connect (mark as online)
+    User.findByIdAndUpdate(socket.user._id, { lastSeen: new Date() }).catch(() => {});
+
     // ========== CHAT EVENTS ==========
 
     /**
@@ -211,6 +214,8 @@ module.exports = (io) => {
 
     socket.on('disconnect', () => {
       console.log(`🔴 Socket disconnected: ${socket.user.name} (${userId})`);
+      // Update lastSeen on disconnect for presence tracking
+      User.findByIdAndUpdate(socket.user._id, { lastSeen: new Date() }).catch(() => {});
     });
   });
 };

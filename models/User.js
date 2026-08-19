@@ -39,7 +39,14 @@ const userSchema = new mongoose.Schema({
         builder: { type: String, enum: ['unverified', 'pending', 'verified'], default: 'unverified' },
         agent:   { type: String, enum: ['unverified', 'pending', 'verified'], default: 'unverified' }
     },
-    commissionHistory: { type: [mongoose.Schema.Types.Mixed], default: [] }
+    commissionHistory: { type: [mongoose.Schema.Types.Mixed], default: [] },
+
+    // Presence & engagement
+    lastSeen: { type: Date, default: null },
+
+    // Builder rating (set by admin)
+    rating: { type: Number, min: 0, max: 5, default: 0 },
+    ratingCount: { type: Number, default: 0 } // How many ratings received
 }, {
     timestamps: true
 });
@@ -49,6 +56,7 @@ userSchema.index({ role: 1 });
 userSchema.index({ oldId: 1 });
 userSchema.index({ builderCode: 1 });
 userSchema.index({ oneEmployeeOwnerId: 1 }, { unique: true, sparse: true });
+userSchema.index({ role: 1, lastSeen: -1 }); // For builder network queries
 
 // Virtual: true when the builder verification is confirmed
 userSchema.virtual('isVerifiedBuilder').get(function () {
