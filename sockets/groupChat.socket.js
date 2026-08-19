@@ -89,11 +89,11 @@ module.exports = (io) => {
         }
 
         // Role check for card types
-        if (messageType === 'inventory_card' && socket.user.role !== 'builder' && socket.user.role !== 'admin') {
+        if (messageType === 'inventory_card' && socket.user.role !== 'builder' && socket.user.role !== 'admin' && socket.user.role !== 'captain' && socket.user.role !== 'agent') {
           socket.emit('error', { message: 'Only builders can post inventory cards' });
           return;
         }
-        if (messageType === 'requirement_card' && socket.user.role !== 'agent' && socket.user.role !== 'admin') {
+        if (messageType === 'requirement_card' && socket.user.role !== 'agent' && socket.user.role !== 'admin' && socket.user.role !== 'captain') {
           socket.emit('error', { message: 'Only agents can post requirement cards' });
           return;
         }

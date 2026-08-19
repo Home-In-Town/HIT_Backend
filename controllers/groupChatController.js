@@ -238,7 +238,7 @@ exports.postMessage = async (req, res) => {
 
     // Builder posts inventory card
     if (messageType === 'inventory_card' && inventoryCard) {
-      if (req.user.role !== 'builder' && req.user.role !== 'admin') {
+      if (req.user.role !== 'builder' && req.user.role !== 'admin' && req.user.role !== 'captain' && req.user.role !== 'agent') {
         return res.status(403).json({ error: 'Only builders can post inventory cards' });
       }
       msgData.inventoryCard = inventoryCard;
@@ -246,7 +246,7 @@ exports.postMessage = async (req, res) => {
 
     // Agent posts requirement card
     if (messageType === 'requirement_card' && requirementCard) {
-      if (req.user.role !== 'agent' && req.user.role !== 'admin') {
+      if (req.user.role !== 'agent' && req.user.role !== 'admin' && req.user.role !== 'captain') {
         return res.status(403).json({ error: 'Only agents can post requirement cards' });
       }
       msgData.requirementCard = requirementCard;
