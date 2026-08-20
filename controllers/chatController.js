@@ -47,7 +47,7 @@ exports.qualifyAndConnect = async (req, res) => {
 
       // Populate the session to be returned
       const populatedSession = await ChatSession.findById(session._id)
-        .populate('participants', 'name phone role companyName')
+        .populate('participants', 'name phone role companyName businessLogoUrl')
         .populate('lastMessage.sender', 'name');
 
       return res.status(200).json({
@@ -93,7 +93,7 @@ exports.qualifyAndConnect = async (req, res) => {
     }
 
     const populatedSession = await ChatSession.findById(session._id)
-      .populate('participants', 'name phone role companyName')
+      .populate('participants', 'name phone role companyName businessLogoUrl')
       .populate('lastMessage.sender', 'name');
 
     res.status(201).json({
@@ -119,7 +119,7 @@ exports.getSessions = async (req, res) => {
       participants: userId,
       active: true
     })
-      .populate('participants', 'name phone role companyName')
+      .populate('participants', 'name phone role companyName businessLogoUrl')
       .populate('lastMessage.sender', 'name')
       .sort({ 'lastMessage.timestamp': -1 });
 
@@ -215,7 +215,7 @@ exports.getContacts = async (req, res) => {
     }
 
     const contacts = await User.find(filter)
-      .select('name phone role companyName')
+      .select('name phone role companyName businessLogoUrl')
       .sort({ name: 1 })
       .limit(100);
 
