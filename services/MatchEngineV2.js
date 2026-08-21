@@ -144,7 +144,10 @@ class MatchEngineV2 {
         'row_house': 'row house',
         'penthouse': 'penthouse',
         'shop': 'commercial',
-        'office': 'commercial'
+        'office': 'commercial',
+        'farmhouse': 'farmhouse',
+        'farm': 'farm',
+        'warehouse': 'warehouse',
       };
       const mappedType = typeMap[requirement.propertyType];
       if (mappedType) {

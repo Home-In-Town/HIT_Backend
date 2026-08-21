@@ -212,6 +212,16 @@ class CrossMatchService {
       }
     }
 
+    // === Transaction Type (5 pts penalty if mismatch) ===
+    if (reqParams.transactionType && invParams.transactionType) {
+      if (reqParams.transactionType === invParams.transactionType) {
+        total += 5;
+        matchedOn.push('transaction_type');
+      } else {
+        total -= 10; // Penalty: buy-lead shouldn't match rent-inventory
+      }
+    }
+
     // === Loan (5 pts) ===
     if (reqParams.loanRequired && invParams.loanRequired !== undefined) {
       total += 5;
