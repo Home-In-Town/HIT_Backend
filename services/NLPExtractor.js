@@ -148,14 +148,16 @@ const BUDGET_FLEXIBLE_PATTERNS = [
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const PROPERTY_TYPES = {
+  'farm': ['farm', 'farms', 'khet', 'kheti'],
+  'farmhouse': ['farmhouse', 'farm house', 'farm land', 'farmland'],
   'flat': ['flat', 'flats', 'apartment', 'apartments', 'apt', 'ghar', 'makan', 'makaan'],
   'plot': ['plot', 'plots', 'land', 'site', 'zameen', 'jamin', 'bhukhand'],
   'villa': ['villa', 'villas', 'bungalow', 'bungalows', 'bangla', 'kothi'],
   'row_house': ['row house', 'rowhouse', 'row-house', 'duplex', 'twin bungalow'],
   'penthouse': ['penthouse', 'pent house'],
-  'shop': ['shop', 'shops', 'showroom', 'commercial', 'dukan', 'dukaan'],
-  'office': ['office', 'office space'],
-  'farmhouse': ['farmhouse', 'farm house', 'farm land', 'farmland'],
+  'shop': ['shop', 'shops', 'showroom', 'dukan', 'dukaan'],
+  'office': ['office', 'office space', 'commercial'],
+  'warehouse': ['warehouse', 'godown', 'storage'],
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -207,6 +209,27 @@ const URGENCY_PATTERNS = {
   ],
   'normal': []
 };
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TRANSACTION TYPE — Buy vs Rent/Lease
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const RENT_PATTERNS = [
+  // English
+  /\b(for\s+rent|on\s+rent|to\s+rent|rental|rented|renting)\b/i,
+  /\b(for\s+lease|on\s+lease|to\s+lease|leased|leasing)\b/i,
+  /\b(tenant|tenants|pg|paying\s+guest)\b/i,
+  /\b(monthly\s+rent|rent\s+budget|rent\s+pe|rent\s+par)\b/i,
+  // Hindi (Romanized)
+  /\b(kiraye?\s*(pe|par|ka|ki|ke|wala|wali)?)\b/i,
+  /\b(bhade?\s*(pe|par|ka|ki|ke|wala|wali)?)\b/i,
+  /\b(kirayedaar|bhartiyadaar|kiray?edar)\b/i,
+  /\b(rent\s*(pe|par|me|mein))\b/i,
+  /\b(lease\s*(pe|par|me|mein))\b/i,
+  // Marathi (Romanized)
+  /\b(bhadya?\s*(ne|la|var|cha|chi)?)\b/i,
+  /\b(bhady?ane)\b/i,
+];
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // LOCATION INDICATORS — Multi-Language
@@ -657,6 +680,7 @@ class NLPExtractor {
       locationCanonical: null,
       locationConfidence: 0,
       propertyType: this._extractPropertyType(text),
+      transactionType: this._extractTransactionType(text),
       possessionNeeded: this._extractPossession(text),
       loanRequired: this._extractLoan(text),
       urgency: this._extractUrgency(text),
@@ -956,6 +980,11 @@ class NLPExtractor {
     return null;
   }
 
+  _extractTransactionType(text) {
+    if (RENT_PATTERNS.some(p => p.test(text))) return 'rent';
+    return 'buy';
+  }
+
   _extractPossession(text) {
     for (const [timeline, patterns] of Object.entries(POSSESSION_PATTERNS)) {
       for (const pattern of patterns) {
@@ -1039,6 +1068,7 @@ class NLPExtractor {
     if (params.budget) count++;
     if (params.location) count++;
     if (params.propertyType) count++;
+    if (params.transactionType && params.transactionType !== 'buy') count++;
     if (params.possessionNeeded) count++;
     if (params.loanRequired) count++;
     if (params.city) count++;

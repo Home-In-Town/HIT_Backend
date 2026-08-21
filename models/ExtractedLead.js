@@ -73,9 +73,10 @@ const extractedLeadSchema = new mongoose.Schema({
     locationRaw: { type: String, default: null },    // original text
     locationCanonical: { type: String, default: null }, // normalized canonical key
     city: { type: String, default: null },
-    propertyType: { type: String, default: null },   // flat, plot, villa, farm
-    area: { type: Number, default: null },            // area in sq.ft (for plot/shop/office) or acres (for farm/farmhouse)
-    areaUnit: { type: String, enum: ['sqft', 'acres'], default: null },
+    propertyType: { type: String, default: null },   // flat, plot, villa, farm, farmhouse, shop, office, warehouse
+    transactionType: { type: String, enum: ['buy', 'rent'], default: 'buy' }, // buy or rent/lease
+    area: { type: Number, default: null },            // area in sq.ft or acres
+    areaUnit: { type: String, enum: ['sqft', 'acres', null], default: null },
     possessionNeeded: { type: String, default: null },
     loanRequired: { type: Boolean, default: false },
     urgency: { type: String, enum: ['normal', 'urgent', 'very_urgent'], default: 'normal' }
