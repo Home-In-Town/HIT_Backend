@@ -184,6 +184,19 @@ const startServer = async () => {
       });
     }
 
+    // Ensure Universal Group ("HIT Community") exists
+    try {
+      const { ensureUniversalGroup } = require('./services/UniversalGroupService');
+      const universalRoom = await ensureUniversalGroup();
+      if (universalRoom) {
+        logger.info(`Universal group ready: "${universalRoom.name}" (${universalRoom.members.length} members)`);
+      } else {
+        logger.warn('Universal group not created yet (no admin user — will create on first registration)');
+      }
+    } catch (ugError) {
+      logger.warn('Failed to initialize universal group (non-critical)', { error: ugError.message });
+    }
+
     // Load dynamic locations from published projects
     try {
       const locationNormalizer = require('./services/LocationNormalizer');

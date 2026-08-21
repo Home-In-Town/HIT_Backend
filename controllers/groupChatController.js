@@ -77,7 +77,7 @@ exports.getRooms = async (req, res) => {
       ...filter,
       'members.user': userId
     })
-      .populate('project', 'projectName city location pricing')
+      .populate('project', 'projectName city location pricing configuration reraNumber projectStatus')
       .populate('members.user', 'name role companyName')
       .populate('createdBy', 'name')
       .sort({ lastActivity: -1 });
@@ -149,7 +149,7 @@ exports.joinRoom = async (req, res) => {
 
 /**
  * POST /api/group-chat/rooms/:roomId/leave
- * Leave a group room
+ * Leave a group room (blocked for universal rooms)
  */
 exports.leaveRoom = async (req, res) => {
   try {
@@ -158,6 +158,11 @@ exports.leaveRoom = async (req, res) => {
 
     const room = await GroupRoom.findById(roomId);
     if (!room) return res.status(404).json({ error: 'Room not found' });
+
+    // Cannot leave the universal group
+    if (room.isUniversal || room.canLeave === false) {
+      return res.status(403).json({ error: 'You cannot leave this group' });
+    }
 
     room.members = room.members.filter(m => m.user.toString() !== userId.toString());
     await room.save();
@@ -173,6 +178,64 @@ exports.leaveRoom = async (req, res) => {
     res.status(200).json({ message: 'Left room successfully' });
   } catch (err) {
     console.error('leaveRoom error:', err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+/**
+ * DELETE /api/group-chat/rooms/:roomId
+ * Delete (deactivate) a group room — only allowed for:
+ *   - The room creator (project owner / captain)
+ *   - Admin
+ * Used when a property is sold and the sub-group is no longer needed.
+ */
+exports.deleteRoom = async (req, res) => {
+  try {
+    const { roomId } = req.params;
+    const userId = req.user._id;
+    const userRole = req.user.role;
+
+    const room = await GroupRoom.findById(roomId);
+    if (!room) return res.status(404).json({ error: 'Room not found' });
+
+    // Cannot delete the universal group
+    if (room.isUniversal) {
+      return res.status(403).json({ error: 'The universal group cannot be deleted' });
+    }
+
+    // Only creator (project owner), room admin, or platform admin can delete
+    const isCreator = room.createdBy.toString() === userId.toString();
+    const isRoomAdmin = room.members.some(m => m.user.toString() === userId.toString() && m.role === 'admin');
+    const isPlatformAdmin = userRole === 'admin';
+
+    if (!isCreator && !isRoomAdmin && !isPlatformAdmin) {
+      return res.status(403).json({ error: 'Only the project owner or admin can delete this group' });
+    }
+
+    // Soft-delete: deactivate the room
+    room.active = false;
+    await room.save();
+
+    // Post system message
+    await GroupMessage.create({
+      room: roomId,
+      sender: userId,
+      messageType: 'system',
+      content: `Group closed by ${req.user.name} — property sold`
+    });
+
+    // Notify members via socket
+    const io = req.app.get('io');
+    if (io) {
+      io.to(`group_${roomId}`).emit('group_deleted', {
+        roomId,
+        message: `"${room.name}" has been closed — property sold`
+      });
+    }
+
+    res.status(200).json({ message: 'Group deleted successfully' });
+  } catch (err) {
+    console.error('deleteRoom error:', err);
     res.status(500).json({ error: err.message });
   }
 };
