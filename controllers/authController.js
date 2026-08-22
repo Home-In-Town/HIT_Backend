@@ -4,6 +4,7 @@ const jwt = require('jsonwebtoken');
 const msg91Service = require('../services/msg91.service');
 const Logger = require('../utils/logger');
 const { catchAsync, AppError } = require('../middleware/errorHandler');
+const { addUserToUniversalGroup } = require('../services/UniversalGroupService');
 
 const logger = new Logger('AuthController');
 
@@ -109,7 +110,7 @@ exports.register = catchAsync(async (req, res) => {
             mpin: hashedMpin,
             email: sanitizedEmail,
             isVerified: false,
-            role: role === 'employee' ? 'unassigned' : (role || 'user')
+            role: role === 'employee' ? 'agent' : (role || 'user')
         });
         if (role === 'captain') {
             user.companyName = companyName || '';
@@ -124,7 +125,7 @@ exports.register = catchAsync(async (req, res) => {
         user.name = sanitizedName;
         user.mpin = hashedMpin;
         user.email = sanitizedEmail;
-        user.role = role === 'employee' ? 'unassigned' : (role || user.role || 'user');
+        user.role = role === 'employee' ? 'agent' : (role || user.role || 'user');
         if (role === 'captain') {
             user.companyName = companyName || '';
             user.businessAddress = businessAddress || '';
@@ -153,6 +154,10 @@ exports.register = catchAsync(async (req, res) => {
         );
         res.cookie('token', token, getCookieOptions(req));
         logger.info('OTP bypassed — user auto-verified', { phone, role: user.role });
+        // Auto-join universal group
+        addUserToUniversalGroup(user._id).catch(err => {
+            logger.warn('Failed to add user to universal group (non-blocking)', { error: err.message });
+        });
         return res.json({ message: 'Registered and logged in (OTP bypassed)', bypassed: true, user: { id: user._id, name: user.name, role: user.role } });
     }
 
@@ -199,6 +204,11 @@ exports.verifyOtp = catchAsync(async (req, res) => {
     // Set Cookie
     res.cookie('token', token, getCookieOptions(req));
     logger.info('User verified successfully', { userId: user._id, phone });
+
+    // Auto-join universal group
+    addUserToUniversalGroup(user._id).catch(err => {
+        logger.warn('Failed to add user to universal group (non-blocking)', { error: err.message });
+    });
 
     // Fire-and-forget auto-link — never delays the verify response
     tryAutoLinkLeadGen(user).catch(() => {});

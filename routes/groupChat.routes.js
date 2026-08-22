@@ -12,6 +12,7 @@ router.post('/rooms', groupChatController.createRoom);
 router.get('/rooms', groupChatController.getRooms);
 router.post('/rooms/:roomId/join', groupChatController.joinRoom);
 router.post('/rooms/:roomId/leave', groupChatController.leaveRoom);
+router.delete('/rooms/:roomId', groupChatController.deleteRoom);
 
 // ── Group Messages ──────────────────────────────────────
 router.get('/rooms/:roomId/messages', groupChatController.getMessages);

@@ -174,6 +174,19 @@ class LeadCaptureService {
         await this._notifyAdmins(io, sender, allLeads[0], allMatches.slice(0, 5));
       }
 
+      // Auto-create project sub-groups for requirement matches
+      if (allMatches.length > 0) {
+        const { findOrCreateProjectSubGroup } = require('./UniversalGroupService');
+        const intent = bestExtraction.intent;
+        for (const match of allMatches) {
+          if (match.project && intent !== 'inventory') {
+            findOrCreateProjectSubGroup(match.project, sender._id.toString(), io).catch(err => {
+              console.error('Sub-group creation failed (non-blocking):', err.message);
+            });
+          }
+        }
+      }
+
       const elapsed = Date.now() - startTime;
       logger.info(`Lead capture completed in ${elapsed}ms`, {
         leadCount: allLeads.length,
@@ -246,6 +259,16 @@ class LeadCaptureService {
       // Notify admins
       if (matches.length > 0) {
         await this._notifyAdmins(io, sender, lead, matches);
+
+        // Auto-create project sub-groups for each match
+        const { findOrCreateProjectSubGroup } = require('./UniversalGroupService');
+        for (const match of matches) {
+          if (match.project && intent !== 'inventory') {
+            findOrCreateProjectSubGroup(match.project, senderId, io).catch(err => {
+              logger.warn('Sub-group creation failed (non-blocking)', { error: err.message, projectId: match.project?._id });
+            });
+          }
+        }
       }
 
       return { lead, matches };
