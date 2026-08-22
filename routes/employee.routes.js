@@ -25,13 +25,13 @@ router.post('/confirm-assignment', protect, restrictTo('unassigned', 'employee')
  * POST /api/employee/location
  * Employee only: Submit real-time location
  */
-router.post('/location', protect, restrictTo('employee'), employeeController.submitLocation);
+router.post('/location', protect, restrictTo('employee', 'agent'), employeeController.submitLocation);
 
 /**
  * POST /api/employee/meeting
  * Employee only: Log a meeting
  */
-router.post('/meeting', protect, restrictTo('employee'), employeeController.logMeeting);
+router.post('/meeting', protect, restrictTo('employee', 'agent'), employeeController.logMeeting);
 
 /**
  * GET /api/employee/my-employees

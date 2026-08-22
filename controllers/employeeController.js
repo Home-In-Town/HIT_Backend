@@ -180,11 +180,11 @@ exports.getHistory = async (req, res) => {
         const employee = await User.findById(employeeId);
         if (!employee) return res.status(404).json({ error: 'Employee not found' });
 
-        if (req.user.role === 'employee' && req.user._id.toString() !== employeeId) {
+        if ((req.user.role === 'employee' || req.user.role === 'agent') && req.user._id.toString() !== employeeId) {
              return res.status(403).json({ error: 'Not authorized to view other employee history' });
         }
 
-        if (req.user.role !== 'employee' && req.user.role !== 'admin') {
+        if (req.user.role !== 'employee' && req.user.role !== 'agent' && req.user.role !== 'admin') {
             // Ensure this employer owns this employee
             if (employee.employerId?.toString() !== req.user._id.toString() || !employee.isEmployerConfirmed) {
                 return res.status(403).json({ error: 'Not authorized to view this employee history' });

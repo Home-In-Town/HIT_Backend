@@ -249,10 +249,10 @@ exports.getBuildersNetwork = async (req, res) => {
     const { search, city, page = 1, limit = 30 } = req.query;
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
-    // Build filter for builders
+    // Build filter for builders/captains (same user type)
     const filter = {
       _id: { $ne: userId },
-      role: 'builder',
+      role: { $in: ['builder', 'captain'] },
       isActive: true
     };
 
@@ -357,8 +357,8 @@ exports.getBuildersNetwork = async (req, res) => {
       dealsClosedToday,
       newProjectsToday
     ] = await Promise.all([
-      User.countDocuments({ role: 'builder', isActive: true }),
-      User.countDocuments({ role: 'builder', isActive: true, lastSeen: { $gte: fiveMinAgo } }),
+      User.countDocuments({ role: { $in: ['builder', 'captain'] }, isActive: true }),
+      User.countDocuments({ role: { $in: ['builder', 'captain'] }, isActive: true, lastSeen: { $gte: fiveMinAgo } }),
       ExtractedLead.countDocuments({ createdAt: { $gte: todayStart }, status: { $in: ['auto_detected', 'confirmed'] } }),
       DealRoom.countDocuments({ status: 'closed_won', updatedAt: { $gte: todayStart } }),
       Project.countDocuments({ createdAt: { $gte: todayStart } })
