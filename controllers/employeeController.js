@@ -10,10 +10,10 @@ exports.search = async (req, res) => {
         const { phone } = req.query;
         if (!phone) return res.status(400).json({ error: 'Phone number is required' });
 
-        // Find users who are either 'unassigned' or 'employee'
+        // Find users who are either 'unassigned', 'employee', or 'agent'
         const employee = await User.findOne({
             phone: { $regex: phone + '$' },
-            role: { $in: ['unassigned', 'employee'] }
+            role: { $in: ['unassigned', 'employee', 'agent'] }
         }).select('name phone role employerId');
 
         if (!employee) {
@@ -41,7 +41,7 @@ exports.requestAssignment = async (req, res) => {
         if (!employeeId) return res.status(400).json({ error: 'Employee ID is required' });
 
         const employee = await User.findById(employeeId);
-        if (!employee || !['unassigned', 'employee'].includes(employee.role)) {
+        if (!employee || !['unassigned', 'employee', 'agent'].includes(employee.role)) {
             return res.status(404).json({ error: 'Available employee not found' });
         }
 
@@ -72,7 +72,10 @@ exports.confirmAssignment = async (req, res) => {
         }
 
         req.user.isEmployerConfirmed = true;
-        req.user.role = 'employee'; // transition to employee role
+        // Only transition unassigned users to employee — agents stay as agent
+        if (req.user.role === 'unassigned') {
+            req.user.role = 'employee';
+        }
         await req.user.save();
 
         res.json({ message: 'Assignment confirmed successfully', user: req.user });
