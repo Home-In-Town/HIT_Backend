@@ -374,6 +374,9 @@ exports.getSession = catchAsync(async (req, res) => {
                     businessLogoUrl: user.businessLogoUrl || null,
                     businessCity:    user.businessCity    || '',
                     businessState:   user.businessState   || '',
+                    rating:          user.rating          || 0,
+                    ratingCount:     user.ratingCount     || 0,
+                    verificationStatus: user.verificationStatus || {},
                 })
             }
         });

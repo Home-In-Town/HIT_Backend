@@ -19,7 +19,7 @@ router.post('/request-assignment', protect, restrictTo('builder', 'agent', 'admi
  * POST /api/employee/confirm-assignment
  * Unassigned user or Employee: Confirm assignment request
  */
-router.post('/confirm-assignment', protect, restrictTo('unassigned', 'employee'), employeeController.confirmAssignment);
+router.post('/confirm-assignment', protect, restrictTo('unassigned', 'employee', 'agent'), employeeController.confirmAssignment);
 
 /**
  * POST /api/employee/location

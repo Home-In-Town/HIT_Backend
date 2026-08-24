@@ -35,7 +35,13 @@ router.get("/", protect, restrictTo('admin'), async (req, res) => {
             role: u.role,
             companyName: u.companyName,
             phone: u.phone,
-            isActive: u.isActive
+            isActive: u.isActive,
+            rating: u.rating || 0,
+            ratingCount: u.ratingCount || 0,
+            verificationStatus: u.verificationStatus || {},
+            businessCity: u.businessCity,
+            businessLogoUrl: u.businessLogoUrl,
+            createdAt: u.createdAt
         }));
 
         res.json(mapped);
@@ -79,12 +85,12 @@ router.get("/by-role/:role", async (req, res) => {
  * PUT /api/users/:id/role
  * Admin only: Assign/Update user role
  */
-router.put("/:id/role", async (req, res) => {
+router.put("/:id/role", protect, restrictTo('admin'), async (req, res) => {
     try {
         const { id } = req.params;
         const { role } = req.body;
 
-        if (!['admin', 'builder', 'agent', 'unassigned', 'user'].includes(role)) {
+        if (!['admin', 'builder', 'agent', 'captain', 'employee', 'unassigned', 'user'].includes(role)) {
             return res.status(400).json({ error: "Invalid role" });
         }
 
@@ -99,6 +105,76 @@ router.put("/:id/role", async (req, res) => {
         }
 
         res.json(user);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * PUT /api/users/:id/rating
+ * Admin only: Set rating for a captain (1-5 stars)
+ */
+router.put("/:id/rating", protect, restrictTo('admin'), async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { rating } = req.body;
+
+        if (rating === undefined || rating < 0 || rating > 5) {
+            return res.status(400).json({ error: "Rating must be between 0 and 5" });
+        }
+
+        const user = await User.findById(id);
+        if (!user) {
+            return res.status(404).json({ error: "User not found" });
+        }
+
+        if (user.role !== 'captain' && user.role !== 'builder') {
+            return res.status(400).json({ error: "Ratings are only for captains/builders" });
+        }
+
+        user.rating = rating;
+        user.ratingCount = (user.ratingCount || 0) + 1;
+        await user.save();
+
+        res.json({
+            message: 'Rating updated',
+            user: { id: user._id, name: user.name, rating: user.rating, ratingCount: user.ratingCount }
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * PUT /api/users/:id/verify
+ * Admin only: Set verification status for a captain/builder
+ * Body: { status: 'verified' | 'pending' | 'unverified' }
+ */
+router.put("/:id/verify", protect, restrictTo('admin'), async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { status } = req.body;
+
+        if (!['verified', 'pending', 'unverified'].includes(status)) {
+            return res.status(400).json({ error: "Status must be 'verified', 'pending', or 'unverified'" });
+        }
+
+        const user = await User.findById(id);
+        if (!user) {
+            return res.status(404).json({ error: "User not found" });
+        }
+
+        if (user.role !== 'captain' && user.role !== 'builder') {
+            return res.status(400).json({ error: "Verification is only for captains/builders" });
+        }
+
+        user.verificationStatus = { ...user.verificationStatus, builder: status };
+        await user.save();
+
+        res.json({
+            message: 'Verification status updated',
+            user: { id: user._id, name: user.name, verificationStatus: user.verificationStatus }
+        });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
