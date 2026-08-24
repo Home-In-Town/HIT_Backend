@@ -22,6 +22,9 @@ const userSchema = new mongoose.Schema({
     isActive: { type: Boolean, default: true },
     companyName: { type: String }, // Optional: Used by Builders / Captains
 
+    // Profile picture (all users)
+    profilePictureUrl: { type: String },
+
     // Captain-specific fields
     businessLogoUrl: { type: String },
     businessAddress: { type: String },
