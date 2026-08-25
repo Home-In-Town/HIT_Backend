@@ -54,4 +54,14 @@ router.put("/:projectId/landmarks", (req, res) => ProjectController.saveLandmark
 // Save layout entities (map polygons, plots, roads, boundaries)
 router.put("/:projectId/layout-entities", (req, res) => ProjectController.saveLayoutEntities(req, res));
 
+// --- INVENTORY ---
+// Get inventory breakdown (seeded from bhkOptions if not yet configured)
+router.get("/:projectId/inventory", (req, res) => ProjectController.getInventory(req, res));
+
+// Set/replace inventory (builder setup or correction)
+router.put("/:projectId/inventory", (req, res) => ProjectController.setInventory(req, res));
+
+// Manually record a unit sale (offline deals / corrections)
+router.post("/:projectId/inventory/sell", (req, res) => ProjectController.sellUnit(req, res));
+
 module.exports = router;

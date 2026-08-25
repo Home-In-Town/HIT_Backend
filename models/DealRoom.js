@@ -37,6 +37,14 @@ const dealRoomSchema = new mongoose.Schema({
   commissionPercent: { type: Number, default: 0 },
   commissionAmount: { type: Number, default: 0 },
 
+  // Which unit type this deal is for — used to decrement project inventory
+  // on closed_won. Sourced from requirementCard.bhkType at creation time.
+  unitType: { type: String, default: null },
+
+  // Idempotency guard: set true once this deal's closed_won has decremented
+  // inventory, so re-saving/re-closing never double-counts.
+  inventoryApplied: { type: Boolean, default: false },
+
   // Deal status
   status: {
     type: String,

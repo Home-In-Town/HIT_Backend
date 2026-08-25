@@ -55,6 +55,27 @@ const projectSchema = new mongoose.Schema({
     gatedCommunity: { type: Boolean, default: false }
   },
 
+  // Inventory tracking: per-unit-type counts + rolled-up totals.
+  // Decrements automatically when a DealRoom reaches closed_won.
+  inventory: {
+    unitTypes: [
+      {
+        label: { type: String },          // e.g. "2BHK", "3BHK", "1200 sqft Plot", "Villa"
+        totalUnits: { type: Number, default: 0, min: 0 },
+        availableUnits: { type: Number, default: 0, min: 0 },
+        bookedUnits: { type: Number, default: 0, min: 0 },
+        soldUnits: { type: Number, default: 0, min: 0 },
+        pricePerUnit: { type: Number, default: 0, min: 0 }
+      }
+    ],
+    // Rolled-up totals (kept in sync by InventoryService.recomputeTotals)
+    totalUnits: { type: Number, default: 0, min: 0 },
+    availableUnits: { type: Number, default: 0, min: 0 },
+    bookedUnits: { type: Number, default: 0, min: 0 },
+    soldUnits: { type: Number, default: 0, min: 0 },
+    lastUpdatedAt: { type: Date }
+  },
+
   amenities: [String],
   landmarks: [
     {

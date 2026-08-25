@@ -2,6 +2,7 @@ const ProjectService = require('../services/ProjectService');
 const User = require('../models/User');
 const Project = require('../models/Project');
 const reverseMatchService = require('../services/ReverseMatchService');
+const inventoryService = require('../services/InventoryService');
 
 /**
  * Fire-and-forget: Notify OneEmployee of project changes for linked users.
@@ -405,6 +406,73 @@ class ProjectController {
       if (error.message === 'Invalid agent' || error.message === 'Agent not under your team') {
         return res.status(400).json({ message: error.message });
       }
+      res.status(500).json({ message: error.message });
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // INVENTORY
+  // ═══════════════════════════════════════════════════════════
+
+  // GET /:projectId/inventory — return the inventory breakdown.
+  // If none is configured, return a skeleton seeded from bhkOptions.
+  async getInventory(req, res) {
+    try {
+      const project = await Project.findById(req.params.projectId)
+        .select('inventory configuration projectName')
+        .lean();
+      if (!project) return res.status(404).json({ message: 'Project not found' });
+
+      const hasInventory = project.inventory && (project.inventory.unitTypes || []).length > 0;
+      const inventory = hasInventory
+        ? project.inventory
+        : {
+            unitTypes: inventoryService.seedFromConfiguration(project),
+            totalUnits: 0,
+            availableUnits: 0,
+            bookedUnits: 0,
+            soldUnits: 0,
+            lastUpdatedAt: null
+          };
+
+      res.json({ inventory, configured: hasInventory });
+    } catch (error) {
+      res.status(500).json({ message: error.message });
+    }
+  }
+
+  // PUT /:projectId/inventory — set/replace inventory (builder setup or correction).
+  // Body: { unitTypes: [{ label, totalUnits, availableUnits?, bookedUnits?, soldUnits?, pricePerUnit? }] }
+  async setInventory(req, res) {
+    try {
+      const { unitTypes } = req.body;
+      if (!Array.isArray(unitTypes)) {
+        return res.status(400).json({ message: 'unitTypes must be an array' });
+      }
+      const project = await inventoryService.setInventory(req.params.projectId, unitTypes);
+      res.json({ inventory: project.inventory });
+    } catch (error) {
+      if (error.message === 'Project not found') {
+        return res.status(404).json({ message: error.message });
+      }
+      res.status(500).json({ message: error.message });
+    }
+  }
+
+  // POST /:projectId/inventory/sell — manually record a sale (offline deals / corrections).
+  // Body: { unitType, quantity? }
+  async sellUnit(req, res) {
+    try {
+      const { unitType, quantity } = req.body;
+      const result = await inventoryService.sellUnit(req.params.projectId, unitType, quantity || 1);
+      if (result.reason === 'project_not_found') {
+        return res.status(404).json({ message: 'Project not found' });
+      }
+      if (!result.applied) {
+        return res.status(400).json({ message: `Could not record sale: ${result.reason}`, result });
+      }
+      res.json({ inventory: result.project.inventory, result });
+    } catch (error) {
       res.status(500).json({ message: error.message });
     }
   }

@@ -6,6 +6,7 @@ const Notification = require('../models/Notification');
 const Project = require('../models/Project');
 const matchEngine = require('../services/MatchEngine');
 const leadCaptureService = require('../services/LeadCaptureService');
+const inventoryService = require('../services/InventoryService');
 
 // ═══════════════════════════════════════════════════════════
 // GROUP ROOMS
@@ -467,6 +468,16 @@ exports.showInterest = async (req, res) => {
       });
     }
 
+    // Resolve the unit type this deal is for, reusing data already captured
+    // during matching (no new manual step):
+    //  1. the client's requested BHK from the requirement card, else
+    //  2. the project's only unit type (unambiguous), else null.
+    let unitType = requirementMsg?.requirementCard?.bhkType || null;
+    if (!unitType) {
+      const bhkOptions = project.configuration?.bhkOptions || [];
+      if (bhkOptions.length === 1) unitType = bhkOptions[0];
+    }
+
     // Create the Deal Room
     const dealRoom = await DealRoom.create({
       agent: agentId,
@@ -477,6 +488,7 @@ exports.showInterest = async (req, res) => {
       clientBudget: requirementMsg?.requirementCard?.budget || 0,
       projectPrice: project.pricing?.startingPrice ? project.pricing.startingPrice / 100000 : 0,
       commissionPercent: 0, // To be negotiated
+      unitType,
       status: 'initiated',
       chatSession: chatSession._id,
       statusHistory: [{ from: null, to: 'initiated', changedBy: agentId }]
@@ -572,6 +584,30 @@ exports.updateDealStatus = async (req, res) => {
     }
     if (note) {
       deal.notes.push({ content: note, addedBy: userId });
+    }
+
+    // ── Inventory: on first transition into closed_won, sell one unit ──
+    // Guarded by inventoryApplied so re-closing never double-decrements.
+    let inventoryResult = null;
+    if (status === 'closed_won' && previousStatus !== 'closed_won' && !deal.inventoryApplied) {
+      try {
+        inventoryResult = await inventoryService.sellUnit(deal.project, deal.unitType);
+        if (inventoryResult.applied) {
+          deal.inventoryApplied = true;
+        } else if (inventoryResult.needsBuilderConfirmation) {
+          // Couldn't resolve which unit type sold — notify builder to confirm.
+          await Notification.create({
+            recipient: deal.builder,
+            type: 'deal_status_update',
+            title: 'Confirm sold unit type',
+            message: 'A deal closed but the unit type could not be determined. Please update inventory manually.',
+            reference: { model: 'DealRoom', id: deal._id }
+          });
+        }
+      } catch (invErr) {
+        // Never block the status update on an inventory hiccup.
+        console.error('Inventory decrement on closed_won failed:', invErr.message);
+      }
     }
 
     await deal.save();
