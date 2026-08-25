@@ -41,6 +41,7 @@ router.get("/", protect, restrictTo('admin'), async (req, res) => {
             verificationStatus: u.verificationStatus || {},
             businessCity: u.businessCity,
             businessLogoUrl: u.businessLogoUrl,
+            profilePictureUrl: u.profilePictureUrl,
             createdAt: u.createdAt
         }));
 
@@ -187,7 +188,7 @@ router.put("/:id/verify", protect, restrictTo('admin'), async (req, res) => {
  */
 router.patch('/profile', protect, async (req, res) => {
     try {
-        const { name, email, companyName, businessLogoUrl } = req.body;
+        const { name, email, companyName, businessLogoUrl, profilePictureUrl } = req.body;
         const userId = req.user._id;
 
         // Explicitly reject phone changes
@@ -219,6 +220,9 @@ router.patch('/profile', protect, async (req, res) => {
         }
         if (businessLogoUrl !== undefined) {
             updates.businessLogoUrl = businessLogoUrl.trim() || null;
+        }
+        if (profilePictureUrl !== undefined) {
+            updates.profilePictureUrl = profilePictureUrl.trim() || null;
         }
 
         if (Object.keys(updates).length === 0) {
