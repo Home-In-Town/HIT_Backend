@@ -171,53 +171,6 @@ const startServer = async () => {
   try {
     logger.info('Starting server initialization...');
 
-    // Connect to MongoDB
-    await connectDB();
-
-    // Initialize services that depend on DB
-    try {
-      initWebhookCron();
-      logger.info('Webhook cron service initialized');
-    } catch (cronError) {
-      logger.warn('Failed to initialize webhook cron (non-critical)', {
-        error: cronError.message,
-      });
-    }
-
-    // Ensure Universal Group ("HIT Community") exists
-    try {
-      const { ensureUniversalGroup } = require('./services/UniversalGroupService');
-      const universalRoom = await ensureUniversalGroup();
-      if (universalRoom) {
-        logger.info(`Universal group ready: "${universalRoom.name}" (${universalRoom.members.length} members)`);
-      } else {
-        logger.warn('Universal group not created yet (no admin user — will create on first registration)');
-      }
-    } catch (ugError) {
-      logger.warn('Failed to initialize universal group (non-critical)', { error: ugError.message });
-    }
-
-    // Load dynamic locations from published projects
-    try {
-      const locationNormalizer = require('./services/LocationNormalizer');
-      const result = await locationNormalizer.loadFromProjects();
-      logger.info(`Location map loaded: ${result.added} new locations, ${result.total} total aliases`);
-
-      // Refresh every 6 hours
-      setInterval(async () => {
-        try {
-          const r = await locationNormalizer.loadFromProjects();
-          if (r.added > 0) logger.info(`Location map refreshed: ${r.added} new locations added`);
-        } catch (err) {
-          logger.warn('Location refresh failed (non-critical)', { error: err.message });
-        }
-      }, 6 * 60 * 60 * 1000);
-    } catch (locError) {
-      logger.warn('Failed to load dynamic locations (non-critical)', {
-        error: locError.message,
-      });
-    }
-
     // Create HTTP server and attach Socket.io
     const server = http.createServer(app);
     const io = new Server(server, {
@@ -238,11 +191,66 @@ const startServer = async () => {
     require('./sockets/groupChat.socket')(io);
     logger.info('Socket.io chat engine initialized (1:1 + group)');
 
-    // Start listening
+    // ── Start listening IMMEDIATELY ──
+    // Cloud Run's startup probe requires the container to bind PORT quickly.
+    // Slow DB-dependent init (MongoDB connect, universal group, location map)
+    // runs in the background AFTER the port is bound to avoid 503 boot failures.
     server.listen(PORT, () => {
       logger.info(`Server running on http://localhost:${PORT}`);
       logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
       logger.info('WebSocket server ready for connections');
+    });
+
+    // ── Background initialization (does NOT block port binding) ──
+    (async () => {
+      // Connect to MongoDB
+      await connectDB();
+
+      // Initialize services that depend on DB
+      try {
+        initWebhookCron();
+        logger.info('Webhook cron service initialized');
+      } catch (cronError) {
+        logger.warn('Failed to initialize webhook cron (non-critical)', {
+          error: cronError.message,
+        });
+      }
+
+      // Ensure Universal Group ("HIT Community") exists
+      try {
+        const { ensureUniversalGroup } = require('./services/UniversalGroupService');
+        const universalRoom = await ensureUniversalGroup();
+        if (universalRoom) {
+          logger.info(`Universal group ready: "${universalRoom.name}" (${universalRoom.members.length} members)`);
+        } else {
+          logger.warn('Universal group not created yet (no admin user — will create on first registration)');
+        }
+      } catch (ugError) {
+        logger.warn('Failed to initialize universal group (non-critical)', { error: ugError.message });
+      }
+
+      // Load dynamic locations from published projects
+      try {
+        const locationNormalizer = require('./services/LocationNormalizer');
+        const result = await locationNormalizer.loadFromProjects();
+        logger.info(`Location map loaded: ${result.added} new locations, ${result.total} total aliases`);
+
+        // Refresh every 6 hours
+        setInterval(async () => {
+          try {
+            const r = await locationNormalizer.loadFromProjects();
+            if (r.added > 0) logger.info(`Location map refreshed: ${r.added} new locations added`);
+          } catch (err) {
+            logger.warn('Location refresh failed (non-critical)', { error: err.message });
+          }
+        }, 6 * 60 * 60 * 1000);
+      } catch (locError) {
+        logger.warn('Failed to load dynamic locations (non-critical)', {
+          error: locError.message,
+        });
+      }
+    })().catch((initErr) => {
+      logger.error('Background initialization error', { error: initErr.message });
     });
 
     // Handle graceful shutdown
