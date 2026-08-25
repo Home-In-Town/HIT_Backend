@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { protect } = require('../middleware/auth');
 const leadCaptureService = require('../services/LeadCaptureService');
+const reverseMatchService = require('../services/ReverseMatchService');
 const ExtractedLead = require('../models/ExtractedLead');
 
 /**
@@ -323,6 +324,36 @@ router.get('/stats', protect, async (req, res) => {
     });
   } catch (err) {
     console.error('getStats error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/lead-matching/match-counts
+ * Count live buyer leads that match each of the given projects.
+ * Powers the "N buyers match this" signal on project cards.
+ *
+ * Body: { projectIds: string[] }
+ * Response: { counts: { [projectId]: number } }
+ */
+router.post('/match-counts', protect, async (req, res) => {
+  try {
+    const { projectIds } = req.body;
+
+    if (!Array.isArray(projectIds)) {
+      return res.status(400).json({ error: 'projectIds must be an array' });
+    }
+
+    // Guard against unbounded requests — cap the batch size.
+    const ids = projectIds.filter(Boolean).slice(0, 100);
+    if (ids.length === 0) {
+      return res.json({ counts: {} });
+    }
+
+    const counts = await reverseMatchService.countMatchesForProjects(ids);
+    return res.json({ counts });
+  } catch (err) {
+    console.error('match-counts error:', err);
     res.status(500).json({ error: err.message });
   }
 });
