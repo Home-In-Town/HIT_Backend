@@ -450,6 +450,60 @@ class ReverseMatchService {
       logger.error('Failed to update leads with reverse match', { error: err.message });
     }
   }
+
+  // ─── Public: Count live matching leads for one or more projects ─────────────
+
+  /**
+   * Count how many recent, live (non-expired) buyer leads match each project,
+   * using the same scoring as the publish-time reverse match.
+   *
+   * This is a read-only, on-demand computation used to surface a "N buyers match
+   * this" signal on project cards. It does not write anything or notify anyone.
+   *
+   * @param {string[]} projectIds - Project ObjectId strings to count matches for
+   * @returns {Promise<Record<string, number>>} map of projectId -> match count
+   */
+  async countMatchesForProjects(projectIds) {
+    const Project = require('../models/Project');
+
+    const result = {};
+    if (!Array.isArray(projectIds) || projectIds.length === 0) return result;
+
+    // Load only the fields the scorer needs. Owner is populated for the
+    // verified-builder bonus and to exclude the owner's own leads.
+    const projects = await Project.find({ _id: { $in: projectIds } })
+      .select('projectName city location latitude longitude projectStatus reraApproved owner pricing configuration')
+      .populate('owner', 'verificationStatus')
+      .lean();
+
+    for (const project of projects) {
+      const id = project._id.toString();
+      try {
+        const candidateLeads = await this._findCandidateLeads(project);
+        if (candidateLeads.length === 0) {
+          result[id] = 0;
+          continue;
+        }
+        const scored = this._scoreLeadsAgainstProject(candidateLeads, project);
+        result[id] = scored.filter(m => m.score >= MIN_REVERSE_SCORE).length;
+      } catch (err) {
+        // Never let one bad project break the whole batch — just report 0.
+        logger.error('countMatchesForProjects: scoring failed for project', {
+          projectId: id,
+          error: err.message
+        });
+        result[id] = 0;
+      }
+    }
+
+    // Ensure every requested id is present in the response (0 if not found).
+    for (const rawId of projectIds) {
+      const id = String(rawId);
+      if (!(id in result)) result[id] = 0;
+    }
+
+    return result;
+  }
 }
 
 module.exports = new ReverseMatchService();
