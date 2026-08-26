@@ -51,7 +51,7 @@ exports.createRoom = async (req, res) => {
     });
 
     await room.populate('members.user', 'name role companyName');
-    await room.populate('project', 'projectName city location');
+    await room.populate('project', 'projectName city location slug media');
 
     res.status(201).json({ room });
   } catch (err) {
@@ -77,7 +77,7 @@ exports.getRooms = async (req, res) => {
       ...filter,
       'members.user': userId
     })
-      .populate('project', 'projectName city location pricing configuration reraNumber projectStatus')
+      .populate('project', 'projectName city location slug media pricing configuration reraNumber projectStatus')
       .populate('members.user', 'name role companyName')
       .populate('createdBy', 'name')
       .sort({ lastActivity: -1 });
@@ -96,7 +96,7 @@ exports.getRooms = async (req, res) => {
     }
 
     const discoverRooms = await GroupRoom.find(discoverFilter)
-      .populate('project', 'projectName city location')
+      .populate('project', 'projectName city location slug media')
       .populate('createdBy', 'name')
       .sort({ lastActivity: -1 })
       .limit(20);
@@ -505,7 +505,7 @@ exports.showInterest = async (req, res) => {
 
     await dealRoom.populate('agent', 'name role companyName phone');
     await dealRoom.populate('builder', 'name role companyName phone');
-    await dealRoom.populate('project', 'projectName city location pricing');
+    await dealRoom.populate('project', 'projectName city location pricing slug media');
 
     res.status(201).json({
       dealRoom,
@@ -601,7 +601,7 @@ exports.updateDealStatus = async (req, res) => {
 
     await deal.populate('agent', 'name role companyName');
     await deal.populate('builder', 'name role companyName');
-    await deal.populate('project', 'projectName city location pricing');
+    await deal.populate('project', 'projectName city location pricing slug media');
 
     res.status(200).json({ deal });
   } catch (err) {
