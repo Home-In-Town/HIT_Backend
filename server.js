@@ -156,6 +156,8 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api/group-chat', groupChatRoutes);
 app.use('/api/share', shareRoutes);
 app.use('/api/lead-matching', require('./routes/leadMatching.routes'));
+app.use('/api/referrals', require('./routes/referral.routes'));
+app.use('/api/human-leads', require('./routes/humanLead.routes'));
 
 // 404 handler
 app.use((req, res) => {

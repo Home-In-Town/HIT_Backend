@@ -270,22 +270,79 @@ exports.manualConnect = async (req, res) => {
 
 /**
  * POST /api/crm-bridge/link
- * Legacy link endpoint — kept for backward compatibility.
+ * Links using the phone/email the user typed in the connect form.
+ * Falls back to the HIT user's own phone/email if nothing was entered.
+ * Body: { phoneOrEmail }
  */
 exports.link = async (req, res) => {
     try {
         const user = await User.findById(req.user._id).select('phone email oneEmployeeOwnerId');
-        const result = await attemptAutoConnect(user);
+        const hitUserId = user._id.toString();
 
-        if (result.connected) {
-            return res.json({ linked: true, ownerEmail: result.ownerEmail, ownerPhone: result.ownerPhone });
+        // Figure out what identifier to search OneEmployee with.
+        // Prefer the value the user typed; fall back to their HIT profile identity.
+        const raw = (req.body?.phoneOrEmail || '').trim();
+        let lookupPhone = user.phone;
+        let lookupEmail = user.email;
+
+        if (raw) {
+            if (raw.includes('@')) {
+                lookupEmail = raw;
+                lookupPhone = undefined;
+            } else {
+                // Treat as a phone number — strip formatting
+                lookupPhone = raw.replace(/\D/g, '');
+                lookupEmail = undefined;
+            }
         }
 
-        return res.status(result.reason === 'linked_to_other' ? 409 : 404).json({
-            error: result.reason === 'linked_to_other' ? 'OWNER_ALREADY_LINKED' : 'NO_MATCHING_OWNER',
+        if (!lookupPhone && !lookupEmail) {
+            return res.status(400).json({ error: 'MISSING_IDENTIFIER' });
+        }
+
+        // Look up the OneEmployee owner by the entered identifier
+        const lookupResult = await leadGenService.lookupOwner(lookupPhone, lookupEmail);
+        if (!lookupResult.found || !lookupResult.owner) {
+            return res.status(404).json({ error: 'NO_MATCHING_OWNER' });
+        }
+
+        const owner = lookupResult.owner;
+        const ownerId = owner._id.toString();
+
+        // Availability check (same rules as auto-connect)
+        const linkedToMe = owner.salesProfileId === hitUserId || owner.hitUserId === hitUserId;
+        const linkedToOther =
+            (owner.salesProfileId && owner.salesProfileId !== hitUserId) &&
+            (owner.hitUserId && owner.hitUserId !== hitUserId);
+
+        if (linkedToOther) {
+            return res.status(409).json({ error: 'OWNER_ALREADY_LINKED', ownerPhone: owner.phone });
+        }
+
+        // Perform (or confirm) the link on the LeadGen side
+        try {
+            await leadGenService.linkOwner(ownerId, hitUserId);
+        } catch (linkErr) {
+            if (linkErr.status === 409 && linkedToMe) {
+                // Already linked to us on LeadGen side — just sync HIT side below
+            } else if (linkErr.status === 409) {
+                return res.status(409).json({ error: 'OWNER_ALREADY_LINKED' });
+            } else {
+                throw linkErr;
+            }
+        }
+
+        // Update HIT side
+        await User.findByIdAndUpdate(user._id, {
+            $set: { oneEmployeeLinked: true, oneEmployeeOwnerId: ownerId },
         });
+
+        logger.info('Link succeeded', { userId: hitUserId, ownerId, via: raw ? 'entered_identifier' : 'profile_identity' });
+
+        return res.json({ linked: true, ownerEmail: owner.email, ownerPhone: owner.phone });
     } catch (err) {
-        return res.status(500).json({ error: err.message });
+        logger.error('link error', { error: err.message });
+        return res.status(err.status || 500).json({ error: err.message });
     }
 };
 
