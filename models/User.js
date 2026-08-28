@@ -44,6 +44,12 @@ const userSchema = new mongoose.Schema({
     },
     commissionHistory: { type: [mongoose.Schema.Types.Mixed], default: [] },
 
+    // ── Referral / "Learn to Get Leads Faster" course ──
+    referralCode: { type: String, unique: true, sparse: true, index: true }, // This user's own shareable code
+    referredBy:   { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null, index: true }, // Who referred this user
+    referredAt:   { type: Date, default: null },   // When this user joined via a referral
+    courseUnlocked: { type: Boolean, default: false }, // Lead-generation course access
+
     // Presence & engagement
     lastSeen: { type: Date, default: null },
 
@@ -70,5 +76,27 @@ userSchema.virtual('isVerifiedBuilder').get(function () {
 userSchema.virtual('isVerifiedAgent').get(function () {
     return this.verificationStatus?.agent === 'verified';
 });
+
+// Referral count for this user (how many people they've referred)
+userSchema.index({ referredBy: 1, createdAt: -1 });
+
+/**
+ * Generate a unique, human-friendly referral code (e.g. "HIT-8F3K2Q").
+ * Retries on the rare chance of a collision.
+ */
+userSchema.statics.generateUniqueReferralCode = async function () {
+    const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no ambiguous chars (0/O, 1/I)
+    for (let attempt = 0; attempt < 6; attempt++) {
+        let code = 'HIT-';
+        for (let i = 0; i < 6; i++) {
+            code += alphabet[Math.floor(Math.random() * alphabet.length)];
+        }
+        // eslint-disable-next-line no-await-in-loop
+        const exists = await this.exists({ referralCode: code });
+        if (!exists) return code;
+    }
+    // Fallback: timestamp-based, effectively collision-free
+    return `HIT-${Date.now().toString(36).toUpperCase()}`;
+};
 
 module.exports = mongoose.model('User', userSchema);

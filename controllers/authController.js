@@ -81,7 +81,8 @@ const getCookieOptions = (req) => {
  */
 exports.register = catchAsync(async (req, res) => {
     const { name, phone, mpin, email, role,
-        companyName, businessAddress, businessCity, businessState, businessPinCode, businessLogoUrl
+        companyName, businessAddress, businessCity, businessState, businessPinCode, businessLogoUrl,
+        referralCode
     } = req.body;
 
     logger.info('Registration initiated', { phone, role });
@@ -89,6 +90,12 @@ exports.register = catchAsync(async (req, res) => {
     // Sanitize input
     const sanitizedName = name.trim();
     const sanitizedEmail = email?.trim() || '';
+
+    // Resolve referrer (if a valid referral code was provided) — only applied to brand-new users below
+    let referrer = null;
+    if (referralCode && typeof referralCode === 'string') {
+        referrer = await User.findOne({ referralCode: referralCode.trim().toUpperCase() }).select('_id');
+    }
 
     // Check if user already exists
     let user = await User.findOne({ phone });
@@ -112,6 +119,11 @@ exports.register = catchAsync(async (req, res) => {
             isVerified: false,
             role: role === 'employee' ? 'agent' : (role || 'user')
         });
+        // Attribute the referral (self-referral guarded — new user can't be referrer)
+        if (referrer) {
+            user.referredBy = referrer._id;
+            user.referredAt = new Date();
+        }
         if (role === 'captain') {
             user.companyName = companyName || '';
             user.businessAddress = businessAddress || '';
