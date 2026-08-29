@@ -19,6 +19,36 @@ const verifyInternalSecret = (req, res, next) => {
 router.use(verifyInternalSecret);
 
 /**
+ * Build every phone format a User document might be stored under.
+ *
+ * HIT's auth flow normalizes phones to "+91XXXXXXXXXX" before saving
+ * (see middleware/authValidation.js), so users who registered or logged in
+ * through the website have the +91 prefix. These internal endpoints, however,
+ * historically used a bare 10-digit number. That mismatch meant:
+ *   - lookups here could not find website-registered users, and
+ *   - accounts created here (10-digit) could never log in, because login
+ *     searches for the +91 form.
+ *
+ * Matching on all variants keeps both flows working.
+ *
+ * @param {string|number} raw
+ * @returns {string[]} candidate phone values
+ */
+function phoneVariants(raw) {
+    const digits = String(raw ?? '').replace(/\D/g, '');
+    if (!digits) return [];
+    const ten = digits.length > 10 ? digits.slice(-10) : digits;
+    return [...new Set([ten, `+91${ten}`, `91${ten}`])];
+}
+
+/** The format HIT auth expects, so accounts we create can actually log in. */
+function canonicalPhone(raw) {
+    const digits = String(raw ?? '').replace(/\D/g, '');
+    const ten = digits.length > 10 ? digits.slice(-10) : digits;
+    return `+91${ten}`;
+}
+
+/**
  * POST /api/internal/verify-user
  * Verifies if a user exists with specific phone and role
  * Used by lead-filteration backend to allow builder login
@@ -33,8 +63,8 @@ router.post('/verify-user', async (req, res) => {
 
         console.log(`🔒 Internal Verification Request: Phone=${phone}, Role=${role || 'any'}`);
 
-        // Build query
-        const query = { phone: phone };
+        // Build query — match every stored phone format (see phoneVariants)
+        const query = { phone: { $in: phoneVariants(phone) } };
         if (role) {
             query.role = role;
         }
@@ -84,7 +114,7 @@ router.get('/projects-by-phone/:phone', async (req, res) => {
         console.log(`🔒 Internal Projects Request: Phone=${phone}`);
 
         const user = await User.findOne({
-            phone: phone,
+            phone: { $in: phoneVariants(phone) },
             role: { $in: ['builder', 'agent', 'admin'] }
         });
 
@@ -128,13 +158,18 @@ router.post('/create-account', async (req, res) => {
         }
 
         // Validate phone (10-digit Indian number)
-        const cleanPhone = phone.toString().replace(/\D/g, '');
-        if (cleanPhone.length !== 10) {
+        const digitsOnly = phone.toString().replace(/\D/g, '');
+        const tenDigit = digitsOnly.length > 10 ? digitsOnly.slice(-10) : digitsOnly;
+        if (tenDigit.length !== 10) {
             return res.status(400).json({ error: 'Phone must be a valid 10-digit Indian number' });
         }
+        // Store in the same format HIT auth uses (+91XXXXXXXXXX) so this account
+        // can actually sign in at /api/auth/login. Storing a bare 10-digit number
+        // created accounts that could never log in.
+        const cleanPhone = canonicalPhone(tenDigit);
 
-        // Check if phone already exists
-        const existing = await User.findOne({ phone: cleanPhone });
+        // Check if phone already exists in ANY stored format
+        const existing = await User.findOne({ phone: { $in: phoneVariants(tenDigit) } });
         if (existing) {
             return res.status(409).json({
                 error: 'An account with this phone number already exists on HomeInTown. Use "Connect" instead.',
@@ -449,8 +484,8 @@ router.get('/user/:hitUserId', async (req, res) => {
  */
 router.get('/user-by-phone/:phone', async (req, res) => {
     try {
-        const phone = req.params.phone.replace(/\D/g, '');
-        const user = await User.findOne({ phone }).select('_id name phone email role isVerified').lean();
+        const user = await User.findOne({ phone: { $in: phoneVariants(req.params.phone) } })
+            .select('_id name phone email role isVerified').lean();
         if (!user) return res.status(404).json({ error: 'No account found with this phone' });
         res.json({ id: user._id.toString(), name: user.name, phone: user.phone, email: user.email, role: user.role });
     } catch (error) {
