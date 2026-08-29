@@ -20,6 +20,9 @@ const userSchema = new mongoose.Schema({
     isEmployerConfirmed: { type: Boolean, default: false },
     isVerified: { type: Boolean, default: false },
     isActive: { type: Boolean, default: true },
+    // Reserved non-human identity used as the sender of AI Lead Matching messages.
+    // Excluded from contact/network listings. Absent/false for all real users.
+    isSystemAssistant: { type: Boolean, default: false },
     companyName: { type: String }, // Optional: Used by Builders / Captains
 
     // Profile picture (all users)

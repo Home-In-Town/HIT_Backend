@@ -75,11 +75,23 @@ const extractedLeadSchema = new mongoose.Schema({
     city: { type: String, default: null },
     propertyType: { type: String, default: null },   // flat, plot, villa, farm, farmhouse, shop, office, warehouse
     transactionType: { type: String, enum: ['buy', 'rent'], default: 'buy' }, // buy or rent/lease
+    expectedPrice: { type: Number, default: null },   // seller's asking price (lakhs) — used for sell/rent listings
     area: { type: Number, default: null },            // area in sq.ft or acres
     areaUnit: { type: String, enum: ['sqft', 'acres', null], default: null },
     possessionNeeded: { type: String, default: null },
     loanRequired: { type: Boolean, default: false },
     urgency: { type: String, enum: ['normal', 'urgent', 'very_urgent'], default: 'normal' }
+  },
+
+  // ─── Lead Direction ──────────────────────────────────────────────────────
+  // Captures whether the lead is a buyer, seller, or rental — richer than the
+  // buy/rent transactionType enum (which cannot express "sell").
+  // Defaults to 'buy' so all existing documents remain valid.
+  direction: {
+    type: String,
+    enum: ['buy', 'sell', 'rent'],
+    default: 'buy',
+    index: true
   },
 
   // ─── Extraction Quality ──────────────────────────────────────────────────

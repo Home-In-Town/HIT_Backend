@@ -199,6 +199,7 @@ exports.getContacts = async (req, res) => {
     const filter = {
       _id: { $ne: userId },
       isActive: true,
+      isSystemAssistant: { $ne: true },
       role: { $in: ['builder', 'agent'] }
     };
 
@@ -253,7 +254,8 @@ exports.getBuildersNetwork = async (req, res) => {
     const filter = {
       _id: { $ne: userId },
       role: { $in: ['builder', 'captain'] },
-      isActive: true
+      isActive: true,
+      isSystemAssistant: { $ne: true }
     };
 
     if (search) {
