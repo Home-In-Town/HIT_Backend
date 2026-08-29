@@ -385,12 +385,18 @@ router.get('/projects/:hitUserId', async (req, res) => {
             return res.status(404).json({ message: 'User not found' });
         }
 
-        // Return ALL non-deleted projects for this user's account
-        // Admin/builder on HIT can see all projects in their dashboard — mirror that here
-        const projects = await Project.find({
-            status: { $ne: 'deleted' }
-        })
-            .select('projectName slug _id coverImage city location projectType category reraApproved reraNumber projectStatus pricing configuration amenities cta media status owner createdAt updatedAt')
+        // Scope projects exactly like the HIT dashboard does
+        // (ProjectController.getProjects): admin sees every project, while
+        // builder / agent / captain see ONLY the projects they own.
+        // Previously this returned every project in the DB, so OneEmployee showed
+        // other builders' projects to every connected user.
+        const projectQuery = { status: { $ne: 'deleted' } };
+        if (user.role !== 'admin') {
+            projectQuery.owner = user._id;
+        }
+
+        const projects = await Project.find(projectQuery)
+            .select('projectName slug _id coverImage city location projectType category reraApproved reraNumber projectStatus pricing configuration amenities cta media status owner createdAt updatedAt latitude longitude googleMapLink landmarks')
             .sort({ createdAt: -1 });
 
         res.status(200).json({
