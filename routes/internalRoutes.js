@@ -420,29 +420,37 @@ router.get('/projects/:hitUserId', async (req, res) => {
             return res.status(404).json({ message: 'User not found' });
         }
 
-        // Scope projects exactly like the HIT dashboard does
-        // (ProjectController.getProjects): admin sees every project, while
-        // builder / agent / captain see ONLY the projects they own.
+        // Scope projects exactly like the HIT dashboard does (ProjectController.getAll):
+        //   admin                      -> every project
+        //   builder / agent / captain  -> only the projects they own
+        //   employee                   -> only projects assigned to them
+        //   anything else              -> nothing
         // Previously this returned every project in the DB, so OneEmployee showed
         // other builders' projects to every connected user.
         const projectQuery = { status: { $ne: 'deleted' } };
-        if (user.role !== 'admin') {
+        const builderInfo = {
+            name: user.name,
+            id: user._id,
+            companyName: user.companyName,
+            role: user.role,
+        };
+
+        if (user.role === 'admin') {
+            // no extra scoping — admin sees everything
+        } else if (['builder', 'agent', 'captain'].includes(user.role)) {
             projectQuery.owner = user._id;
+        } else if (user.role === 'employee') {
+            projectQuery.assignedAgent = user._id;
+        } else {
+            // 'user' / 'unassigned' own no projects
+            return res.status(200).json({ builder: builderInfo, projects: [] });
         }
 
         const projects = await Project.find(projectQuery)
             .select('projectName slug _id coverImage city location projectType category reraApproved reraNumber projectStatus pricing configuration amenities cta media status owner createdAt updatedAt latitude longitude googleMapLink landmarks')
             .sort({ createdAt: -1 });
 
-        res.status(200).json({
-            builder: {
-                name: user.name,
-                id: user._id,
-                companyName: user.companyName,
-                role: user.role
-            },
-            projects
-        });
+        res.status(200).json({ builder: builderInfo, projects });
 
     } catch (error) {
         console.error('Internal Projects by ID Error:', error);
