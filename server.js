@@ -156,6 +156,7 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api/group-chat', groupChatRoutes);
 app.use('/api/share', shareRoutes);
 app.use('/api/lead-matching', require('./routes/leadMatching.routes'));
+app.use('/api/lead-chat', require('./routes/leadChat.routes'));
 app.use('/api/referrals', require('./routes/referral.routes'));
 app.use('/api/human-leads', require('./routes/humanLead.routes'));
 
@@ -229,6 +230,15 @@ const startServer = async () => {
         }
       } catch (ugError) {
         logger.warn('Failed to initialize universal group (non-critical)', { error: ugError.message });
+      }
+
+      // Ensure the reserved AI Assistant identity exists (AI Lead Matching)
+      try {
+        const { ensureAssistant } = require('./services/AssistantIdentity');
+        await ensureAssistant();
+        logger.info('AI Assistant identity ready');
+      } catch (asstError) {
+        logger.warn('Failed to ensure AI Assistant identity (non-critical)', { error: asstError.message });
       }
 
       // Load dynamic locations from published projects

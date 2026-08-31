@@ -29,6 +29,21 @@ const chatMessageSchema = new mongoose.Schema({
     filename: { type: String },
     size: { type: Number }
   },
+  // AI Lead Matching: answer-template metadata for assistant (system) messages.
+  // Tells the frontend which input control to render for the current question.
+  // Absent for all normal chat messages.
+  template: {
+    slotId: { type: String },
+    // 'choice' | 'number' | 'text' | 'location' | 'phone' | 'summary' | 'results'
+    inputType: { type: String },
+    options: { type: mongoose.Schema.Types.Mixed }, // choice options / summary values / match cards
+    unit: [{ type: String }],
+    // progress hint for the UI: current index (1-based) and total applicable slots
+    progress: {
+      current: { type: Number },
+      total: { type: Number }
+    }
+  },
   readBy: [{
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'

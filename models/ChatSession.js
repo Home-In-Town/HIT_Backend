@@ -31,6 +31,23 @@ const chatSessionSchema = new mongoose.Schema({
       projectsCompleted: { type: Number, default: 0 }
     }
   },
+  // ─── AI Lead Matching (Assistant Thread) ───────────────────────────────────
+  // Marks this session as the persistent AI Assistant conversation for a user.
+  // Absent/false for all normal 1:1 chat sessions.
+  isAssistant: { type: Boolean, default: false, index: true },
+  // Deterministic slot-filling conversation state. Only used when isAssistant.
+  leadFlowState: {
+    intent: { type: String, enum: ['sell', 'buy', 'rent', null], default: null },
+    slots: { type: mongoose.Schema.Types.Mixed, default: {} }, // { slotId: value }
+    currentSlotId: { type: String, default: null },
+    // slotId currently being edited (re-open from summary); null when not editing
+    editingSlotId: { type: String, default: null },
+    status: {
+      type: String,
+      enum: ['in_progress', 'awaiting_confirmation', 'completed'],
+      default: 'in_progress'
+    }
+  },
   lastMessage: {
     content: { type: String, default: '' },
     sender: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
