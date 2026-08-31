@@ -16,6 +16,7 @@
 const Project = require('../models/Project');
 const User = require('../models/User'); // Required for populate('owner')
 const locationNormalizer = require('./LocationNormalizer');
+const propertyTypeNormalizer = require('./PropertyTypeNormalizer');
 const Logger = require('../utils/logger');
 const logger = new Logger('MatchEngineV2');
 
@@ -47,12 +48,11 @@ class MatchEngineV2 {
     try {
       // Build the MongoDB query
       const query = this._buildQuery(requirement, excludeOwner);
-      console.log('[MatchEngineV2 DEBUG] Query built:', JSON.stringify(query, null, 2));
 
       // Fetch candidate projects (wider net than final results)
       const projects = await Project.find(query)
         .populate('owner', 'name companyName role verificationStatus')
-        .select('projectName projectType city location latitude longitude pricing configuration projectStatus owner media slug reraApproved landmarks')
+        .select('projectName projectType category propertyType city location latitude longitude pricing configuration projectStatus owner media slug reraApproved landmarks')
         .limit(80) // Fetch more candidates for better scoring
         .lean();
 
@@ -135,23 +135,29 @@ class MatchEngineV2 {
       query['pricing.bankLoanAvailable'] = true;
     }
 
-    // Property type filter
+    // Property type: SOFT signal — we do NOT hard-exclude here, because a
+    // project may express its type via projectType, category, OR the free-text
+    // propertyType label. Hard-filtering on a single legacy field silently
+    // drops valid matches (e.g. Mixed Use, "Commercial Plot / Land"). Scoring
+    // handles type relevance instead (_scorePropertyType).
+    //
+    // We only apply a loose category-level narrowing to keep the candidate set
+    // relevant when the requirement clearly targets one category — but we keep
+    // legacy projects (no category field) in the net via $or.
     if (requirement.propertyType) {
-      const typeMap = {
-        'flat': 'flat',
-        'plot': 'plot',
-        'villa': 'villa',
-        'row_house': 'row house',
-        'penthouse': 'penthouse',
-        'shop': 'commercial',
-        'office': 'commercial',
-        'farmhouse': 'farmhouse',
-        'farm': 'farm',
-        'warehouse': 'warehouse',
-      };
-      const mappedType = typeMap[requirement.propertyType];
-      if (mappedType) {
-        query.projectType = { $regex: mappedType, $options: 'i' };
+      const norm = propertyTypeNormalizer.normalize(requirement.propertyType);
+      if (norm.category && norm.category !== 'mixed_use') {
+        const catRegex = norm.category === 'residential' ? /residential/i : /commercial/i;
+        // Match projects in the same category OR projects with no category set
+        // (legacy) OR mixed-use projects — scoring ranks them afterward.
+        query.$and = (query.$and || []).concat([{
+          $or: [
+            { category: { $regex: catRegex } },
+            { category: { $exists: false } },
+            { category: null },
+            { category: /mixed/i }
+          ]
+        }]);
       }
     }
 
@@ -180,31 +186,40 @@ class MatchEngineV2 {
     const matchedOn = [];
     let totalScore = 0;
 
-    // === Budget Match (30 points max) ===
+    // === Budget Match (28 points max) ===
     const budgetScore = this._scoreBudget(requirement, project);
     breakdown.budget = budgetScore;
     totalScore += budgetScore.score;
     if (budgetScore.score > 0) matchedOn.push('budget');
 
-    // === Location Match (30 points max — upgraded from 25) ===
+    // === Location Match (28 points max) ===
     const locationScore = this._scoreLocation(requirement, project);
     breakdown.location = locationScore;
     totalScore += locationScore.score;
     if (locationScore.score > 0) matchedOn.push(locationScore.method);
 
-    // === BHK Match (20 points max) ===
-    const bhkScore = this._scoreBhk(requirement, project);
+    // === Property Type Match (18 points max) ===
+    const typeScore = this._scorePropertyType(requirement, project);
+    breakdown.propertyType = typeScore;
+    totalScore += typeScore.score;
+    if (typeScore.score > 0) matchedOn.push(typeScore.method);
+
+    // === BHK Match (14 points max) — skipped for land/plot types ===
+    const isLand = requirement.propertyType && propertyTypeNormalizer.isLandType(requirement.propertyType);
+    const bhkScore = isLand
+      ? { score: 0, detail: 'land_no_bhk', skipped: true }
+      : this._scoreBhk(requirement, project);
     breakdown.bhk = bhkScore;
     totalScore += bhkScore.score;
     if (bhkScore.score > 0) matchedOn.push('bhk');
 
-    // === Loan Match (8 points max) ===
+    // === Loan Match (6 points max) ===
     const loanScore = this._scoreLoan(requirement, project);
     breakdown.loan = loanScore;
     totalScore += loanScore.score;
     if (loanScore.score > 0) matchedOn.push('loan');
 
-    // === Possession Match (7 points max) ===
+    // === Possession Match (6 points max) ===
     const possessionScore = this._scorePossession(requirement, project);
     breakdown.possession = possessionScore;
     totalScore += possessionScore.score;
@@ -242,12 +257,32 @@ class MatchEngineV2 {
     const projPrice = project.pricing.startingPrice;
     const diff = Math.abs(reqBudget - projPrice) / reqBudget;
 
-    if (diff <= 0.05) return { score: 30, detail: 'within_5%' };
-    if (diff <= 0.10) return { score: 26, detail: 'within_10%' };
-    if (diff <= 0.15) return { score: 20, detail: 'within_15%' };
-    if (diff <= 0.20) return { score: 14, detail: 'within_20%' };
-    if (diff <= 0.30) return { score: 8, detail: 'within_30%' };
+    if (diff <= 0.05) return { score: 28, detail: 'within_5%' };
+    if (diff <= 0.10) return { score: 24, detail: 'within_10%' };
+    if (diff <= 0.15) return { score: 19, detail: 'within_15%' };
+    if (diff <= 0.20) return { score: 13, detail: 'within_20%' };
+    if (diff <= 0.30) return { score: 7, detail: 'within_30%' };
     return { score: 0, detail: `diff_${Math.round(diff * 100)}%` };
+  }
+
+  /**
+   * Score property-type relevance (0..18) using PropertyTypeNormalizer, which
+   * understands legacy projectType, the category field, AND the rich free-text
+   * propertyType labels from the upload form (incl. Mixed Use).
+   *
+   * When the requirement specifies no type, returns a small neutral score so
+   * we neither reward nor punish (type just isn't a factor).
+   */
+  _scorePropertyType(requirement, project) {
+    const reqType = requirement.propertyType;
+    const result = propertyTypeNormalizer.matchScore(reqType, project);
+
+    if (result.score === null) {
+      // Requirement gave no type → neutral (don't skew ranking).
+      return { score: 4, method: 'type_neutral' };
+    }
+    const points = Math.round(result.score * 18);
+    return { score: points, method: `type_${result.method}`, raw: result.method };
   }
 
   _scoreLocation(requirement, project) {
@@ -271,17 +306,17 @@ class MatchEngineV2 {
       // Score based on confidence and method
       switch (locationMatch.method) {
         case 'canonical_match':
-          return { score: 30, method: 'location_exact', confidence: locationMatch.confidence };
+          return { score: 28, method: 'location_exact', confidence: locationMatch.confidence };
         case 'geo_proximity_2km':
-          return { score: 28, method: 'location_2km', confidence: locationMatch.confidence };
+          return { score: 26, method: 'location_2km', confidence: locationMatch.confidence };
         case 'geo_proximity_5km':
-          return { score: 20, method: 'location_5km', confidence: locationMatch.confidence };
+          return { score: 19, method: 'location_5km', confidence: locationMatch.confidence };
         case 'substring_fallback':
-          return { score: 15, method: 'location_substring', confidence: locationMatch.confidence };
+          return { score: 14, method: 'location_substring', confidence: locationMatch.confidence };
         case 'trigram_similarity':
-          return { score: 12, method: 'location_fuzzy', confidence: locationMatch.confidence };
+          return { score: 11, method: 'location_fuzzy', confidence: locationMatch.confidence };
         default:
-          return { score: 10, method: locationMatch.method, confidence: locationMatch.confidence };
+          return { score: 9, method: locationMatch.method, confidence: locationMatch.confidence };
       }
     }
 
@@ -309,7 +344,7 @@ class MatchEngineV2 {
       const optLower = option.toLowerCase().replace(/\s+/g, '');
       // Check if option contains the same BHK number
       if (optLower.includes(reqBhk) || optLower.includes(`${bhkNum}bhk`)) {
-        return { score: 20, detail: 'exact_match' };
+        return { score: 14, detail: 'exact_match' };
       }
     }
 
@@ -317,7 +352,7 @@ class MatchEngineV2 {
     for (const option of project.configuration.bhkOptions) {
       const optNum = parseInt(option);
       if (!isNaN(optNum) && Math.abs(optNum - bhkNum) === 1) {
-        return { score: 8, detail: 'adjacent_bhk' };
+        return { score: 6, detail: 'adjacent_bhk' };
       }
     }
 
@@ -326,17 +361,17 @@ class MatchEngineV2 {
 
   _scoreLoan(requirement, project) {
     if (requirement.loanRequired && project.pricing?.bankLoanAvailable) {
-      return { score: 8, detail: 'loan_available' };
+      return { score: 6, detail: 'loan_available' };
     }
     if (!requirement.loanRequired) {
-      return { score: 4, detail: 'not_required' }; // Small bonus for not being restrictive
+      return { score: 3, detail: 'not_required' }; // Small bonus for not being restrictive
     }
     return { score: 0, detail: 'loan_not_available' };
   }
 
   _scorePossession(requirement, project) {
     if (!requirement.possessionNeeded || !project.projectStatus) {
-      return { score: 3, detail: 'no_data_neutral' }; // Neutral score when no data
+      return { score: 2, detail: 'no_data_neutral' }; // Neutral score when no data
     }
 
     const possessionMap = {
@@ -350,7 +385,7 @@ class MatchEngineV2 {
     const projectStatus = project.projectStatus.toLowerCase().replace(/\s+/g, '-');
 
     if (validStatuses.some(s => projectStatus.includes(s))) {
-      return { score: 7, detail: 'status_match' };
+      return { score: 6, detail: 'status_match' };
     }
     return { score: 0, detail: 'status_mismatch' };
   }
@@ -379,8 +414,17 @@ class MatchEngineV2 {
     }
 
     // BHK match
-    if (breakdown.bhk?.score >= 15) {
-      confidence += 0.2;
+    if (breakdown.bhk?.score >= 10) {
+      confidence += 0.15;
+      factors++;
+    }
+
+    // Property type match (strong signal for correct inventory class)
+    if (breakdown.propertyType?.score >= 14) {
+      confidence += 0.15;
+      factors++;
+    } else if (breakdown.propertyType?.score >= 8) {
+      confidence += 0.08;
       factors++;
     }
 
