@@ -17,5 +17,6 @@ router.post('/open', leadChatController.openAssistantThread);
 router.post('/answer', leadChatController.submitAnswer);
 router.post('/edit', leadChatController.editSlot);
 router.post('/confirm', leadChatController.confirmLead);
+router.post('/new', leadChatController.startNewLead);
 
 module.exports = router;

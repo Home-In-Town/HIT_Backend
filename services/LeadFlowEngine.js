@@ -17,6 +17,7 @@
  */
 
 const schema = require('../config/leadSlotSchema');
+const phrasings = require('../config/leadChatPhrasings');
 
 const PHONE_RE = /^[6-9]\d{9}$/;
 
@@ -41,11 +42,22 @@ class LeadFlowEngine {
 
   /**
    * Resolve the question text for a slot given the current intent.
-   * Prefers slot.questionByIntent[intent], falls back to slot.question.
+   *
+   * Phrasing variety (Approach A, no LLM): first tries a RANDOM variant from
+   * the curated phrasing pools (leadChatPhrasings) so the wording feels human
+   * and not scripted. Falls back deterministically to slot.questionByIntent,
+   * then slot.question. Behavior/flow is unaffected — only surface text varies.
+   *
    * Returns { en, hi }.
    */
   questionFor(slot, intent) {
     if (!slot) return { en: '', hi: '' };
+
+    // 1) Random curated variant (the "AI feel").
+    const variant = phrasings.pickQuestion(slot.id, intent);
+    if (variant) return variant;
+
+    // 2) Deterministic fallbacks (unchanged behavior).
     if (intent && slot.questionByIntent && slot.questionByIntent[intent]) {
       return slot.questionByIntent[intent];
     }

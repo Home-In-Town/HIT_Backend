@@ -21,6 +21,7 @@ const User = require('../models/User');
 const leadFlowEngine = require('../services/LeadFlowEngine');
 const locationNormalizer = require('../services/LocationNormalizer');
 const matchEngineV2 = require('../services/MatchEngineV2');
+const phrasings = require('../config/leadChatPhrasings');
 const { getAssistantIdAsync } = require('../services/AssistantIdentity');
 const Logger = require('../utils/logger');
 
@@ -29,25 +30,36 @@ const logger = new Logger('LeadChat');
 // ─── Message builders ───────────────────────────────────────────────────────
 
 /**
- * Build the greeting content shown when the thread is first created.
+ * Build the (varied) greeting content shown when the thread is first created.
  */
 function greetingContent() {
-  return 'Namaste! Main aapki lead matching me help karunga. Bas tap karke jawab dein.';
+  return phrasings.pickGreeting();
 }
 
 /**
- * Localized, intent-aware question text — Hinglish (Hindi) is the primary UX language.
+ * Localized, intent-aware question text — Hinglish (Hindi) is the primary UX
+ * language. Picks a random curated phrasing (via the engine) for the "AI feel".
+ *
+ * `ackForSlot` (optional): the slot the user JUST answered, plus its display
+ * value, so we can occasionally prepend a short acknowledgment ("Perfect.",
+ * "Manish Nagar, badhiya area!") inline before the next question (Option A).
  */
-function questionContent(slot, intent) {
+function questionContent(slot, intent, ackForSlot, ackValue) {
   const q = leadFlowEngine.questionFor(slot, intent);
-  return (q && (q.hi || q.en)) || 'Please answer:';
+  const question = (q && (q.hi || q.en)) || 'Please answer:';
+
+  if (ackForSlot) {
+    const ack = phrasings.pickAck(ackForSlot, ackValue);
+    if (ack) return `${ack} ${question}`;
+  }
+  return question;
 }
 
 /**
  * Create an assistant (system) question message for a given slot, with the
  * answer-template metadata attached so the frontend can render the control.
  */
-async function postQuestion(session, slot, assistantId, user) {
+async function postQuestion(session, slot, assistantId, user, ack) {
   const flow = session.leadFlowState || {};
   const intent = flow.intent || null;
   const prog = leadFlowEngine.progress(intent, flow.slots || {}, slot.id);
@@ -69,7 +81,7 @@ async function postQuestion(session, slot, assistantId, user) {
   const msg = await ChatMessage.create({
     session: session._id,
     sender: assistantId,
-    content: questionContent(slot, intent),
+    content: questionContent(slot, intent, ack && ack.slotId, ack && ack.value),
     messageType: 'system',
     template,
     readBy: [assistantId]
@@ -86,7 +98,7 @@ async function postSummary(session, assistantId) {
   const msg = await ChatMessage.create({
     session: session._id,
     sender: assistantId,
-    content: `Confirm karein: ${summary.text}`,
+    content: `${phrasings.pickSummaryLead()} ${summary.text}`,
     messageType: 'system',
     template: {
       inputType: 'summary',
@@ -114,7 +126,7 @@ async function postText(session, assistantId, content) {
  * Advance the conversation: post the next question, or the summary if complete.
  * Mutates and saves session.leadFlowState.currentSlotId / status.
  */
-async function advance(session, assistantId, user) {
+async function advance(session, assistantId, user, ack) {
   const flow = session.leadFlowState;
   const next = leadFlowEngine.nextSlot(flow.intent, flow.slots || {});
 
@@ -130,7 +142,7 @@ async function advance(session, assistantId, user) {
   flow.status = 'in_progress';
   session.markModified('leadFlowState');
   await session.save();
-  return postQuestion(session, next, assistantId, user);
+  return postQuestion(session, next, assistantId, user, ack);
 }
 
 /**
@@ -218,10 +230,11 @@ exports.submitAnswer = async (req, res) => {
 
     const result = leadFlowEngine.parseAndValidate(slot, value);
     if (!result.valid) {
-      // Re-ask the same slot with a corrective hint; state unchanged.
-      await postText(session, assistantId, result.hint);
+      // Re-ask the same slot with a corrective (varied) hint; state unchanged.
+      const hint = phrasings.pickRetryHint(slot.inputType) || result.hint;
+      await postText(session, assistantId, hint);
       const q = await postQuestion(session, slot, assistantId, req.user);
-      return res.status(200).json({ valid: false, hint: result.hint, message: q, flowState: flow });
+      return res.status(200).json({ valid: false, hint, message: q, flowState: flow });
     }
 
     // Record the user's answer as a chat message (right-aligned bubble).
@@ -251,7 +264,14 @@ exports.submitAnswer = async (req, res) => {
     session.markModified('leadFlowState');
     await session.save();
 
-    const message = await advance(session, assistantId, req.user);
+    // Occasional inline acknowledgment before the next question (Option A).
+    // Only on normal forward flow — not while editing, and not right after the
+    // intent choice (nothing meaningful to react to yet).
+    const ack = (!isEditing && slotId !== 'intent')
+      ? { slotId, value: String(displayVal) }
+      : null;
+
+    const message = await advance(session, assistantId, req.user, ack);
     return res.status(200).json({ valid: true, message, flowState: session.leadFlowState });
   } catch (err) {
     logger.error('submitAnswer error', { error: err.message });
@@ -286,6 +306,34 @@ exports.editSlot = async (req, res) => {
     return res.status(200).json({ message, flowState: session.leadFlowState });
   } catch (err) {
     logger.error('editSlot error', { error: err.message });
+    return res.status(500).json({ error: err.message });
+  }
+};
+
+/**
+ * POST /api/lead-chat/new  { sessionId }
+ * Start a fresh lead conversation on demand (from the "New requirement" action
+ * in the closing tray). Resets flow state and posts the intent question.
+ * Prior messages are preserved (same persistent thread).
+ */
+exports.startNewLead = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const assistantId = await getAssistantIdAsync();
+    const { sessionId } = req.body || {};
+
+    const session = await ChatSession.findOne({ _id: sessionId, isAssistant: true, participants: userId });
+    if (!session) return res.status(404).json({ error: 'Assistant thread not found' });
+
+    session.leadFlowState = freshFlowState();
+    session.markModified('leadFlowState');
+    await session.save();
+
+    const intentSlot = leadFlowEngine.getSlot('intent');
+    const message = await postQuestion(session, intentSlot, assistantId, req.user);
+    return res.status(200).json({ message, flowState: session.leadFlowState });
+  } catch (err) {
+    logger.error('startNewLead error', { error: err.message });
     return res.status(500).json({ error: err.message });
   }
 };
@@ -378,9 +426,7 @@ exports.confirmLead = async (req, res) => {
       score: m.score,
       slug: m.project.slug
     }));
-    const resultsContent = matches.length > 0
-      ? `Mil gaye! ${matches.length} matching ${matches.length === 1 ? 'result' : 'results'}.`
-      : 'Abhi koi match nahi mila. Aapki lead save ho gayi hai, match milte hi bata denge.';
+    const resultsContent = phrasings.pickResults(matches.length);
     const resultsMsg = await ChatMessage.create({
       session: session._id,
       sender: assistantId,
@@ -390,24 +436,40 @@ exports.confirmLead = async (req, res) => {
       readBy: [assistantId]
     });
 
-    // 5) Mark completed, then loop back to a fresh intent question.
+    // 5) Close the flow gracefully — a warm wrap-up + optional quick actions.
+    //    We do NOT auto-restart the intent question (that felt pushy). The
+    //    conversation enters a terminal 'completed' state with NO pending
+    //    question; the user chooses what to do next via the actions tray.
+    const closingMsg = await postText(session, assistantId, phrasings.pickClosing());
+    const actionsMsg = await ChatMessage.create({
+      session: session._id,
+      sender: assistantId,
+      content: 'Aage kya karna chahenge?',
+      messageType: 'system',
+      template: {
+        inputType: 'actions',
+        options: {
+          actions: [
+            { action: 'new_lead', label: { en: 'New requirement', hi: 'Nayi requirement' }, icon: 'plus' },
+            { action: 'view_leads', label: { en: 'View my leads', hi: 'Meri leads dekhein' }, icon: 'list' }
+          ]
+        }
+      },
+      readBy: [assistantId]
+    });
+
     flow.status = 'completed';
+    flow.currentSlotId = null;
+    flow.editingSlotId = null;
     session.markModified('leadFlowState');
     await session.save();
-
-    session.leadFlowState = freshFlowState();
-    session.markModified('leadFlowState');
-    await session.save();
-
-    await postText(session, assistantId, 'Kuch aur? Bechna / Kharidna / Rent — batayein.');
-    const intentSlot = leadFlowEngine.getSlot('intent');
-    const loopBackMsg = await postQuestion(session, intentSlot, assistantId, req.user);
 
     return res.status(201).json({
       leadId: lead._id,
       matchCount: matches.length,
       resultsMessage: resultsMsg,
-      loopBackMessage: loopBackMsg,
+      closingMessage: closingMsg,
+      actionsMessage: actionsMsg,
       flowState: session.leadFlowState
     });
   } catch (err) {
