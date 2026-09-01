@@ -15,6 +15,7 @@ class ProjectRepository {
   async getAll() {
     const projects = await Project.find()
       .populate('owner', 'name role companyName phone')
+      .populate('coCaptains', 'name role companyName phone')
       .populate('assignedAgent', 'name phone')
       .lean();
     return projects.map(mapProject);
@@ -23,17 +24,19 @@ class ProjectRepository {
   async getById(id) {
     const project = await Project.findById(id)
       .populate('owner', 'name role companyName phone')
+      .populate('coCaptains', 'name role companyName phone')
       .populate('assignedAgent', 'name phone')
       .lean();
     return mapProject(project);
   }
 
   /**
-   * Get projects by owner ID (for builder/agent role)
+   * Get projects a user manages — as the primary owner OR as a co-captain.
    */
   async getByOwner(ownerId) {
-    const projects = await Project.find({ owner: ownerId })
+    const projects = await Project.find({ $or: [{ owner: ownerId }, { coCaptains: ownerId }] })
       .populate('owner', 'name role companyName phone')
+      .populate('coCaptains', 'name role companyName phone')
       .populate('assignedAgent', 'name phone')
       .lean();
     return projects.map(mapProject);
@@ -45,6 +48,7 @@ class ProjectRepository {
   async getByAssignedAgent(agentId) {
     const projects = await Project.find({ assignedAgent: agentId })
       .populate('owner', 'name role companyName phone')
+      .populate('coCaptains', 'name role companyName phone')
       .populate('assignedAgent', 'name phone')
       .lean();
     return projects.map(mapProject);
@@ -121,6 +125,7 @@ class ProjectRepository {
   async getPublished() {
     const projects = await Project.find({ status: 'published' })
       .populate('owner', 'name role companyName phone')
+      .populate('coCaptains', 'name role companyName phone')
       .populate('assignedAgent', 'name phone')
       .lean();
     return projects.map(mapProject);

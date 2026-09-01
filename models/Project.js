@@ -26,6 +26,14 @@ const projectSchema = new mongoose.Schema({
     default: null
   },
 
+  // Additional captains who co-manage this project alongside the primary owner.
+  // The primary captain is `owner`; co-captains get the same project visibility.
+  coCaptains: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    index: true
+  }],
+
   city: String,
   location: String,
   latitude: Number,

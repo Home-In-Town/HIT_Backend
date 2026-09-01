@@ -358,6 +358,28 @@ class ProjectController {
     }
   }
 
+  // Add or remove a co-captain (second captain) on a project. Body: { captainId, action: 'add'|'remove' }
+  async assignCoCaptain(req, res) {
+    try {
+      const { projectId } = req.params;
+      const { captainId, action } = req.body;
+
+      const result = await ProjectService.assignCoCaptainToProject(projectId, captainId, action === 'remove' ? 'remove' : 'add');
+      res.json(result);
+    } catch (error) {
+      if (error.message === 'Project not found') {
+        return res.status(404).json({ message: error.message });
+      }
+      if (error.message === 'Invalid captain') {
+        return res.status(400).json({ message: 'The specified user is not a valid captain' });
+      }
+      if (error.message === 'captainId is required' || error.message.includes('already the primary')) {
+        return res.status(400).json({ message: error.message });
+      }
+      res.status(500).json({ message: error.message });
+    }
+  }
+
   async getCaptains(req, res) {
     try {
       const captains = await User.find({ role: 'captain' })
