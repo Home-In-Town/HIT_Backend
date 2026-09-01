@@ -11,7 +11,11 @@ const REFERRAL_GOAL = 10;
  * Prefers an explicit env var, else falls back to the app's public site.
  */
 function referralBaseUrl() {
-    return (process.env.PUBLIC_APP_URL || 'https://homeintown.in').replace(/\/+$/, '');
+    // Prefer the same origin the app is served from (FRONTEND_URL is used across the app),
+    // then an explicit PUBLIC_APP_URL, then the production default.
+    const fromFrontend = process.env.FRONTEND_URL ? process.env.FRONTEND_URL.split(',')[0].trim() : '';
+    const base = fromFrontend || process.env.PUBLIC_APP_URL || 'https://www.homeintown.in';
+    return base.replace(/\/+$/, '');
 }
 
 /**

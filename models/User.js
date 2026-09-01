@@ -47,6 +47,14 @@ const userSchema = new mongoose.Schema({
     },
     commissionHistory: { type: [mongoose.Schema.Types.Mixed], default: [] },
 
+    // ── Captain ↔ Captain team-up (partnership) ──
+    // Confirmed partner captains — kept symmetric (both sides list each other)
+    partnerCaptains: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User', index: true }],
+    // Team-up requests THIS captain has received (awaiting their accept/decline)
+    partnerRequestsIncoming: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+    // Team-up requests THIS captain has sent (awaiting the other's response)
+    partnerRequestsOutgoing: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+
     // ── Referral / "Learn to Get Leads Faster" course ──
     referralCode: { type: String, unique: true, sparse: true, index: true }, // This user's own shareable code
     referredBy:   { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null, index: true }, // Who referred this user

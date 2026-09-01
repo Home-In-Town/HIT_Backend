@@ -35,14 +35,19 @@ function resolveOwningCaptain(user) {
 /**
  * Build the Mongo filter that enforces visibility rules for the caller.
  * - admin   → sees everything
- * - captain → sees leads owned by their team (owningCaptain === me) or created by them
+ * - captain → sees leads owned by their team (owningCaptain === me), created by them,
+ *             OR owned by a partner (teamed-up) captain
  * - agent   → sees their team's leads (owningCaptain === my captain) or leads they created/are assigned
+ *
+ * `partnerIds` is the caller's list of teamed-up captain ids (empty unless captain).
  */
-function visibilityFilter(user) {
+function visibilityFilter(user, partnerIds = []) {
   if (user.role === 'admin') return {};
 
   if (user.role === 'captain') {
-    return { $or: [{ owningCaptain: user._id }, { createdBy: user._id }] };
+    const or = [{ owningCaptain: user._id }, { createdBy: user._id }];
+    if (partnerIds.length) or.push({ owningCaptain: { $in: partnerIds } });
+    return { $or: or };
   }
 
   if (user.role === 'agent' || user.role === 'employee') {
@@ -55,6 +60,13 @@ function visibilityFilter(user) {
 
   // builder / other roles — only their own
   return { $or: [{ createdBy: user._id }, { assignedAgent: user._id }] };
+}
+
+// Fetch the caller's confirmed partner-captain ids (only relevant for captains)
+async function getPartnerIds(user) {
+  if (user.role !== 'captain') return [];
+  const me = await User.findById(user._id).select('partnerCaptains').lean();
+  return (me?.partnerCaptains || []).map((p) => p.toString());
 }
 
 /**
@@ -102,8 +114,9 @@ exports.createLead = async (req, res) => {
 exports.getLeads = async (req, res) => {
   try {
     const { stage, search, archived } = req.query;
+    const partnerIds = await getPartnerIds(req.user);
 
-    const filter = { ...visibilityFilter(req.user) };
+    const filter = { ...visibilityFilter(req.user, partnerIds) };
     filter.archived = archived === 'true';
     if (stage && stage !== 'All') filter.stage = stage;
 
@@ -111,7 +124,7 @@ exports.getLeads = async (req, res) => {
       const rx = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
       const searchOr = [{ name: rx }, { phone: rx }, { projectName: rx }];
       // Combine the visibility $or with the search $or via $and
-      const vis = visibilityFilter(req.user);
+      const vis = visibilityFilter(req.user, partnerIds);
       const base = { archived: filter.archived };
       if (stage && stage !== 'All') base.stage = stage;
       const and = [base, { $or: searchOr }];
@@ -135,7 +148,8 @@ exports.getLeadById = async (req, res) => {
   try {
     const lead = await HumanLead.findById(req.params.id).populate(POPULATE).lean();
     if (!lead) return res.status(404).json({ error: 'Lead not found' });
-    if (!canAccess(req.user, lead)) return res.status(403).json({ error: 'Not authorized to view this lead' });
+    const partnerIds = await getPartnerIds(req.user);
+    if (!canAccess(req.user, lead, partnerIds)) return res.status(403).json({ error: 'Not authorized to view this lead' });
     return res.json({ lead: shape(lead) });
   } catch (err) {
     console.error('getLeadById error:', err);
@@ -153,7 +167,8 @@ exports.updateStage = async (req, res) => {
 
     const lead = await HumanLead.findById(req.params.id);
     if (!lead) return res.status(404).json({ error: 'Lead not found' });
-    if (!canAccess(req.user, lead)) return res.status(403).json({ error: 'Not authorized' });
+    const partnerIds = await getPartnerIds(req.user);
+    if (!canAccess(req.user, lead, partnerIds)) return res.status(403).json({ error: 'Not authorized' });
 
     const from = lead.stage;
     lead.stage = stage;
@@ -176,7 +191,8 @@ exports.updateLead = async (req, res) => {
   try {
     const lead = await HumanLead.findById(req.params.id);
     if (!lead) return res.status(404).json({ error: 'Lead not found' });
-    if (!canAccess(req.user, lead)) return res.status(403).json({ error: 'Not authorized' });
+    const partnerIds = await getPartnerIds(req.user);
+    if (!canAccess(req.user, lead, partnerIds)) return res.status(403).json({ error: 'Not authorized' });
 
     for (const key of LEAD_FIELDS) {
       if (req.body[key] !== undefined && key !== 'stage') lead[key] = req.body[key];
@@ -215,16 +231,28 @@ exports.assignAgent = async (req, res) => {
     }
 
     if (agentId) {
-      // Validate the agent belongs to the captain's team (or is the captain themselves)
-      const agent = await User.findById(agentId).select('employerId role name');
-      if (!agent) return res.status(400).json({ error: 'Agent not found' });
-      const agentCaptain = agent.employerId ? agent.employerId.toString() : null;
-      const owning = lead.owningCaptain ? lead.owningCaptain.toString() : req.user._id.toString();
-      const assigningToSelf = agent._id.toString() === req.user._id.toString();
-      if (!assigningToSelf && agentCaptain !== owning) {
-        return res.status(400).json({ error: 'Agent is not part of your team' });
+      const target = await User.findById(agentId).select('employerId role name');
+      if (!target) return res.status(400).json({ error: 'Agent not found' });
+
+      const me = await User.findById(req.user._id).select('partnerCaptains').lean();
+      const partnerIds = (me?.partnerCaptains || []).map((p) => p.toString());
+      const isPartnerCaptain = target.role === 'captain' && partnerIds.includes(target._id.toString());
+
+      if (isPartnerCaptain) {
+        // Handing the lead to a partner captain — transfer team ownership to them
+        // so their whole team gets visibility, and assign it to that captain.
+        lead.owningCaptain = target._id;
+        lead.assignedAgent = target._id;
+      } else {
+        // Otherwise it must be one of the captain's own agents (or the captain themselves)
+        const agentCaptain = target.employerId ? target.employerId.toString() : null;
+        const owning = lead.owningCaptain ? lead.owningCaptain.toString() : req.user._id.toString();
+        const assigningToSelf = target._id.toString() === req.user._id.toString();
+        if (!assigningToSelf && agentCaptain !== owning) {
+          return res.status(400).json({ error: 'Agent is not part of your team' });
+        }
+        lead.assignedAgent = agentId;
       }
-      lead.assignedAgent = agentId;
     } else {
       lead.assignedAgent = null;
     }
@@ -245,13 +273,31 @@ exports.assignAgent = async (req, res) => {
  */
 exports.getTeamAgents = async (req, res) => {
   try {
-    // Only captains manage assignment — return the captain's own confirmed agents/employees.
+    // Only captains manage assignment.
     if (req.user.role !== 'captain') {
       return res.json({ agents: [] });
     }
-    const query = { employerId: req.user._id, isEmployerConfirmed: true, role: { $in: ['agent', 'employee'] } };
-    const agents = await User.find(query).select('_id name phone role').sort({ name: 1 }).lean();
-    return res.json({ agents: agents.map(a => ({ id: a._id.toString(), name: a.name, phone: a.phone, role: a.role })) });
+
+    // The captain's own confirmed agents/employees
+    const agentQuery = { employerId: req.user._id, isEmployerConfirmed: true, role: { $in: ['agent', 'employee'] } };
+    const agents = await User.find(agentQuery).select('_id name phone role').sort({ name: 1 }).lean();
+
+    // Plus any teamed-up partner captains (so leads can be handed to a partner)
+    const me = await User.findById(req.user._id)
+      .populate('partnerCaptains', 'name phone role companyName')
+      .lean();
+    const partners = (me?.partnerCaptains || []).map((c) => ({
+      id: c._id.toString(),
+      name: c.companyName ? `${c.name} (${c.companyName})` : c.name,
+      phone: c.phone,
+      role: 'captain',
+    }));
+
+    const list = [
+      ...agents.map((a) => ({ id: a._id.toString(), name: a.name, phone: a.phone, role: a.role })),
+      ...partners,
+    ];
+    return res.json({ agents: list });
   } catch (err) {
     console.error('getTeamAgents error:', err);
     return res.status(500).json({ error: err.message });
@@ -260,8 +306,9 @@ exports.getTeamAgents = async (req, res) => {
 
 // ── Helpers ──
 
-// True if this user is allowed to see/act on a given lead
-function canAccess(user, lead) {
+// True if this user is allowed to see/act on a given lead.
+// `partnerIds` = caller's teamed-up captain ids (so partners can collaborate).
+function canAccess(user, lead, partnerIds = []) {
   if (user.role === 'admin') return true;
   const uid = user._id.toString();
   const createdBy = lead.createdBy?._id ? lead.createdBy._id.toString() : lead.createdBy?.toString();
@@ -269,7 +316,9 @@ function canAccess(user, lead) {
   const owning = lead.owningCaptain?._id ? lead.owningCaptain._id.toString() : lead.owningCaptain?.toString();
 
   if (createdBy === uid || assigned === uid) return true;
-  if (user.role === 'captain') return owning === uid;
+  if (user.role === 'captain') {
+    return owning === uid || (owning && partnerIds.includes(owning));
+  }
   if (user.role === 'agent' || user.role === 'employee') {
     const emp = user.employerId;
     const captainId = emp ? (emp._id ? emp._id.toString() : emp.toString()) : null;

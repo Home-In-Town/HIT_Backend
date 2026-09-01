@@ -159,6 +159,7 @@ app.use('/api/lead-matching', require('./routes/leadMatching.routes'));
 app.use('/api/lead-chat', require('./routes/leadChat.routes'));
 app.use('/api/referrals', require('./routes/referral.routes'));
 app.use('/api/human-leads', require('./routes/humanLead.routes'));
+app.use('/api/captain-team', require('./routes/captainTeam.routes'));
 
 // 404 handler
 app.use((req, res) => {
