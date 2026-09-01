@@ -80,7 +80,17 @@ const extractedLeadSchema = new mongoose.Schema({
     areaUnit: { type: String, enum: ['sqft', 'acres', null], default: null },
     possessionNeeded: { type: String, default: null },
     loanRequired: { type: Boolean, default: false },
-    urgency: { type: String, enum: ['normal', 'urgent', 'very_urgent'], default: 'normal' }
+    urgency: { type: String, enum: ['normal', 'urgent', 'very_urgent'], default: 'normal' },
+
+    // ─── Sell-listing fields (from AI Lead Matching "sell" flow) ────────────
+    // Mirror the project upload form so a seller lead carries listing detail.
+    // All optional/nullable — buy/rent leads simply leave them null.
+    category: { type: String, default: null },              // Residential | Commercial | Mixed Use
+    projectStatus: { type: String, default: null },         // ready-to-move | under-construction | pre-launch
+    reraApproved: { type: Boolean, default: null },
+    reraNumber: { type: String, default: null },
+    bankLoanAvailable: { type: Boolean, default: null },
+    amenities: { type: [String], default: undefined }       // key amenities selected in chat
   },
 
   // ─── Lead Direction ──────────────────────────────────────────────────────
