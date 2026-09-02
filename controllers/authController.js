@@ -170,7 +170,7 @@ exports.register = catchAsync(async (req, res) => {
         addUserToUniversalGroup(user._id).catch(err => {
             logger.warn('Failed to add user to universal group (non-blocking)', { error: err.message });
         });
-        return res.json({ message: 'Registered and logged in (OTP bypassed)', bypassed: true, user: { id: user._id, name: user.name, role: user.role } });
+        return res.json({ message: 'Registered and logged in (OTP bypassed)', bypassed: true, token, user: { id: user._id, name: user.name, role: user.role } });
     }
 
     // Send MSG91 Verification
@@ -227,6 +227,8 @@ exports.verifyOtp = catchAsync(async (req, res) => {
 
     res.json({
         message: 'Verification successful',
+        // Token also returned in the body for the mobile app (cookie kept for web).
+        token,
         user: {
             id: user._id,
             name: user.name,
@@ -282,6 +284,9 @@ exports.login = catchAsync(async (req, res) => {
 
     res.json({
         message: 'Login successful',
+        // Token is also returned in the body for the mobile app (which cannot
+        // use the httpOnly cookie). The web app keeps using the cookie above.
+        token,
         user: {
             id: user._id,
             name: user.name,
@@ -352,7 +357,11 @@ exports.getMe = catchAsync(async (req, res) => {
  * Does NOT return 401 if unauthenticated.
  */
 exports.getSession = catchAsync(async (req, res) => {
-    const token = req.cookies.token;
+    // Cookie first (web), then Authorization: Bearer (mobile).
+    let token = req.cookies.token;
+    if (!token && req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
+        token = req.headers.authorization.split(' ')[1];
+    }
     if (!token) {
         return res.json({ authenticated: false, user: null });
     }

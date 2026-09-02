@@ -2,15 +2,24 @@ const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 
 /**
- * Protect route with JWT verification from HTTP-Only Cookie.
+ * Protect route with JWT verification.
+ * Accepts the token from either:
+ *   1. The HTTP-Only `token` cookie (used by the web app), or
+ *   2. An `Authorization: Bearer <token>` header (used by the mobile app).
+ * The cookie is checked first so existing web behaviour is unchanged.
  */
 exports.protect = async (req, res, next) => {
     try {
         let token;
 
-        // Check for token in cookies
+        // 1) Check for token in cookies (web app)
         if (req.cookies && req.cookies.token) {
             token = req.cookies.token;
+        }
+
+        // 2) Fall back to Authorization: Bearer <token> (mobile app)
+        if (!token && req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
+            token = req.headers.authorization.split(' ')[1];
         }
 
         if (!token) {
