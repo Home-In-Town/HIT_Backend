@@ -74,6 +74,7 @@ async function postQuestion(session, slot, assistantId, user, ack) {
     options,
     unit: slot.unit || [],
     skippable: !!slot.skippable,
+    allowCustom: !!slot.allowCustom,
     progress: prog
   };
 

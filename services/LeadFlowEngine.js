@@ -259,6 +259,11 @@ class LeadFlowEngine {
       case 'choice': {
         const allowed = this.resolveOptions(slot, filledSlots).map((o) => o.value);
         if (allowed.includes(raw)) return { valid: true, value: raw };
+        // allowCustom: accept a typed value not in the preset options.
+        if (slot.allowCustom) {
+          const custom = this._sanitizeCustom(raw);
+          if (custom) return { valid: true, value: custom, custom: true };
+        }
         return {
           valid: false,
           hint: 'Please choose one of the given options.'
@@ -268,11 +273,27 @@ class LeadFlowEngine {
       case 'multichoice': {
         const allowed = this.resolveOptions(slot, filledSlots).map((o) => o.value);
         const arr = Array.isArray(raw) ? raw : [raw];
-        const filtered = arr.filter((v) => allowed.includes(v));
-        if (filtered.length === 0) {
+        // Keep preset values; if allowCustom, also keep sanitized custom strings.
+        const cleaned = [];
+        for (const v of arr) {
+          if (allowed.includes(v)) { cleaned.push(v); continue; }
+          if (slot.allowCustom) {
+            const c = this._sanitizeCustom(v);
+            if (c) cleaned.push(c);
+          }
+        }
+        // De-duplicate (case-insensitive).
+        const seen = new Set();
+        const deduped = cleaned.filter((v) => {
+          const k = String(v).toLowerCase();
+          if (seen.has(k)) return false;
+          seen.add(k);
+          return true;
+        });
+        if (deduped.length === 0) {
           return { valid: false, hint: 'Please select at least one option, or skip.' };
         }
-        return { valid: true, value: filtered };
+        return { valid: true, value: deduped };
       }
 
       case 'number': {
@@ -430,6 +451,21 @@ class LeadFlowEngine {
   }
 
   // ─── Helpers ────────────────────────────────────────────────────────────
+
+  /**
+   * Sanitize a user-typed custom value: trim, collapse whitespace, cap length,
+   * strip control characters. Returns '' if nothing usable remains.
+   */
+  _sanitizeCustom(raw) {
+    if (raw == null) return '';
+    const s = String(raw)
+      // eslint-disable-next-line no-control-regex
+      .replace(/[\u0000-\u001F\u007F]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 60);
+    return s;
+  }
 
   _numberAndUnit(v) {
     if (v && typeof v === 'object') {
