@@ -41,6 +41,30 @@ class LeadFlowEngine {
   }
 
   /**
+   * Resolve the option list for a slot given prior answers. Supports:
+   *   - static slot.options
+   *   - dynamic slot.optionsByAnswer[depSlotId][depValue] → options[]
+   * (e.g. sell propertyTypeDetailed options depend on the chosen category)
+   */
+  resolveOptions(slot, filledSlots = {}) {
+    if (!slot) return [];
+    if (slot.optionsByAnswer && typeof slot.optionsByAnswer === 'object') {
+      for (const [depId, map] of Object.entries(slot.optionsByAnswer)) {
+        const depVal = filledSlots[depId];
+        if (depVal != null && map[depVal]) return map[depVal];
+      }
+    }
+    return slot.options || [];
+  }
+
+  /**
+   * Is a value the "skipped" sentinel?
+   */
+  isSkipped(v) {
+    return v === this.schema.SKIP_VALUE;
+  }
+
+  /**
    * Resolve the question text for a slot given the current intent.
    *
    * Phrasing variety (Approach A, no LLM): first tries a RANDOM variant from
@@ -78,11 +102,17 @@ class LeadFlowEngine {
     }
 
     if (slot.branchIf && typeof slot.branchIf === 'object') {
-      for (const [depId, expected] of Object.entries(slot.branchIf)) {
+      const entries = Object.entries(slot.branchIf);
+      const results = entries.map(([depId, expected]) => {
         const actual = filledSlots ? filledSlots[depId] : undefined;
         const allowed = Array.isArray(expected) ? expected : [expected];
-        if (!allowed.includes(actual)) return false;
-      }
+        return allowed.includes(actual);
+      });
+      // branchMatch 'any' → applies if ANY dependency matches (used when the
+      // same slot can be gated by either propertyType OR propertyTypeDetailed).
+      // Default 'all' → every dependency must match.
+      const ok = slot.branchMatch === 'any' ? results.some(Boolean) : results.every(Boolean);
+      if (!ok) return false;
     }
 
     return true;
@@ -144,14 +174,26 @@ class LeadFlowEngine {
       if (!slot.appliesToIntent.includes(intent)) return false;
     }
     if (slot.branchIf && typeof slot.branchIf === 'object') {
-      for (const [depId, expected] of Object.entries(slot.branchIf)) {
-        const actual = filledSlots ? filledSlots[depId] : undefined;
-        // Dependency answered and does NOT match → definitely excluded.
-        if (actual !== undefined && actual !== null && actual !== '') {
+      const entries = Object.entries(slot.branchIf);
+      // Consider only dependencies that have been answered; unanswered ones are
+      // optimistically treated as "might still match".
+      const answered = entries.filter(([depId]) => {
+        const a = filledSlots ? filledSlots[depId] : undefined;
+        return a !== undefined && a !== null && a !== '';
+      });
+      if (answered.length > 0) {
+        const results = answered.map(([depId, expected]) => {
           const allowed = Array.isArray(expected) ? expected : [expected];
-          if (!allowed.includes(actual)) return false;
+          return allowed.includes(filledSlots[depId]);
+        });
+        const ok = slot.branchMatch === 'any' ? results.some(Boolean) : results.every(Boolean);
+        // For 'any', if some deps are unanswered they could still make it match,
+        // so only exclude when ALL deps are answered and none matched.
+        if (slot.branchMatch === 'any') {
+          if (answered.length === entries.length && !ok) return false;
+        } else if (!ok) {
+          return false;
         }
-        // Dependency not answered yet → optimistically counts as possible.
       }
     }
     return true;
@@ -204,17 +246,33 @@ class LeadFlowEngine {
    * { value, unit } when the slot has a unit toggle. On success, value is
    * { amount, unit } for unit slots, or a plain number otherwise.
    */
-  parseAndValidate(slot, raw) {
+  parseAndValidate(slot, raw, filledSlots = {}) {
     if (!slot) return { valid: false, hint: 'Unknown question.' };
+
+    // Allow skipping optional slots.
+    if (this.isSkipped(raw)) {
+      if (slot.skippable) return { valid: true, value: this.schema.SKIP_VALUE };
+      return { valid: false, hint: 'This detail is required.' };
+    }
 
     switch (slot.inputType) {
       case 'choice': {
-        const allowed = (slot.options || []).map((o) => o.value);
+        const allowed = this.resolveOptions(slot, filledSlots).map((o) => o.value);
         if (allowed.includes(raw)) return { valid: true, value: raw };
         return {
           valid: false,
           hint: 'Please choose one of the given options.'
         };
+      }
+
+      case 'multichoice': {
+        const allowed = this.resolveOptions(slot, filledSlots).map((o) => o.value);
+        const arr = Array.isArray(raw) ? raw : [raw];
+        const filtered = arr.filter((v) => allowed.includes(v));
+        if (filtered.length === 0) {
+          return { valid: false, hint: 'Please select at least one option, or skip.' };
+        }
+        return { valid: true, value: filtered };
       }
 
       case 'number': {
@@ -289,34 +347,60 @@ class LeadFlowEngine {
     const direction = intent; // 'sell' | 'buy' | 'rent'
     const transactionType = intent === 'rent' ? 'rent' : 'buy'; // preserve existing enum
 
-    const area = this._numberAndUnit(filledSlots.area);
-    const price = this._numberAndUnit(filledSlots.expectedPrice);
+    // Treat skipped sentinel as "not provided" (null).
+    const val = (id) => {
+      const v = filledSlots[id];
+      return this.isSkipped(v) ? null : (v ?? null);
+    };
+
+    const area = this._numberAndUnit(val('area'));
+    const price = this._numberAndUnit(val('expectedPrice'));
 
     // Normalize price to lakhs for the existing budget/expectedPrice fields.
     let priceLakhs = price.amount;
-    if (price.unit === 'cr') priceLakhs = price.amount * 100;
+    if (price.unit === 'cr' && price.amount != null) priceLakhs = price.amount * 100;
 
     // Normalize area unit to the ExtractedLead enum ['sqft','acres',null].
     let areaUnit = null;
     if (area.unit === 'sqft' || area.unit === 'acres') areaUnit = area.unit;
 
+    // Property type: SELL uses the detailed label; BUY/RENT use the simple value.
+    const propertyType = val('propertyTypeDetailed') || val('propertyType') || null;
+
+    // Map sell possession/status → possessionNeeded for matching consistency.
+    const status = val('projectStatus');
+    const possessionNeeded = val('possession') ||
+      (status === 'ready-to-move' ? 'ready' : status === 'under-construction' ? 'under_construction' : null);
+
+    const amenities = (() => {
+      const a = filledSlots.amenities;
+      if (this.isSkipped(a) || !a) return [];
+      return Array.isArray(a) ? a : [a];
+    })();
+
     const params = {
-      bhkType: filledSlots.bhk || null,
+      bhkType: val('bhk'),
       // For a sell/rent listing the "budget" concept is the asking price.
       budget: priceLakhs != null ? priceLakhs : null,
       budgetMax: null,
       expectedPrice: priceLakhs != null ? priceLakhs : null,
-      location: filledSlots.location || null,
-      locationRaw: filledSlots.location || null,
+      location: val('location'),
+      locationRaw: val('location'),
       locationCanonical: null, // controller fills via LocationNormalizer
-      city: filledSlots.city || null,
-      propertyType: filledSlots.propertyType || null,
+      city: val('city'),
+      category: val('category'),               // sell only
+      propertyType,
       transactionType,
       area: area.amount != null ? area.amount : null,
       areaUnit,
-      possessionNeeded: filledSlots.possession || null,
+      possessionNeeded,
+      projectStatus: status,                    // sell only
+      reraApproved: val('reraApproved') === 'yes' ? true : (val('reraApproved') === 'no' ? false : null),
+      reraNumber: val('reraNumber'),            // sell only
       loanRequired: false,
-      urgency: filledSlots.urgency || 'normal'
+      bankLoanAvailable: val('bankLoanAvailable') === 'yes' ? true : (val('bankLoanAvailable') === 'no' ? false : null),
+      amenities,                                // sell only
+      urgency: val('urgency') || 'normal'
     };
 
     return { direction, transactionType, params };
@@ -332,13 +416,16 @@ class LeadFlowEngine {
     for (const slot of applicable) {
       const raw = filledSlots[slot.id];
       if (raw === undefined || raw === null || raw === '') continue;
+      const skipped = this.isSkipped(raw);
       values.push({
         slotId: slot.id,
         label: slot.question.en,
-        display: this._displayValue(slot, raw)
+        display: skipped ? 'Skipped' : this._displayValue(slot, raw, filledSlots),
+        skipped
       });
     }
-    const text = values.map((v) => v.display).join(' • ');
+    // Only non-skipped values contribute to the one-line text summary.
+    const text = values.filter((v) => !v.skipped).map((v) => v.display).join(' • ');
     return { text: text || 'Lead', values };
   }
 
@@ -352,10 +439,15 @@ class LeadFlowEngine {
     return { amount: null, unit: null };
   }
 
-  _displayValue(slot, raw) {
+  _displayValue(slot, raw, filledSlots = {}) {
+    if (this.isSkipped(raw)) return 'Skipped';
     if (slot.inputType === 'choice') {
-      const opt = (slot.options || []).find((o) => o.value === raw);
+      const opt = this.resolveOptions(slot, filledSlots).find((o) => o.value === raw);
       return opt ? opt.label.en : String(raw);
+    }
+    if (slot.inputType === 'multichoice') {
+      const arr = Array.isArray(raw) ? raw : [raw];
+      return arr.join(', ');
     }
     if (slot.inputType === 'number') {
       const { amount, unit } = this._numberAndUnit(raw);

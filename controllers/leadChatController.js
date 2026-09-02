@@ -64,12 +64,16 @@ async function postQuestion(session, slot, assistantId, user, ack) {
   const intent = flow.intent || null;
   const prog = leadFlowEngine.progress(intent, flow.slots || {}, slot.id);
 
-  const options = slot.inputType === 'choice' ? slot.options : undefined;
+  // Resolve options dynamically (e.g. sell propertyTypeDetailed depends on category).
+  const options = (slot.inputType === 'choice' || slot.inputType === 'multichoice')
+    ? leadFlowEngine.resolveOptions(slot, flow.slots || {})
+    : undefined;
   const template = {
     slotId: slot.id,
     inputType: slot.inputType,
     options,
     unit: slot.unit || [],
+    skippable: !!slot.skippable,
     progress: prog
   };
 
@@ -228,17 +232,19 @@ exports.submitAnswer = async (req, res) => {
     const slot = leadFlowEngine.getSlot(slotId);
     if (!slot) return res.status(400).json({ error: 'Unknown slot.' });
 
-    const result = leadFlowEngine.parseAndValidate(slot, value);
+    const result = leadFlowEngine.parseAndValidate(slot, value, flow.slots || {});
     if (!result.valid) {
       // Re-ask the same slot with a corrective (varied) hint; state unchanged.
-      const hint = phrasings.pickRetryHint(slot.inputType) || result.hint;
+      const hint = result.hint || phrasings.pickRetryHint(slot.inputType);
       await postText(session, assistantId, hint);
       const q = await postQuestion(session, slot, assistantId, req.user);
       return res.status(200).json({ valid: false, hint, message: q, flowState: flow });
     }
 
     // Record the user's answer as a chat message (right-aligned bubble).
-    const displayVal = leadFlowEngine._displayValue(slot, result.value);
+    const displayVal = leadFlowEngine.isSkipped(result.value)
+      ? 'Skipped'
+      : leadFlowEngine._displayValue(slot, result.value, flow.slots || {});
     await ChatMessage.create({
       session: session._id,
       sender: userId,
