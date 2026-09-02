@@ -23,6 +23,7 @@
  *   questionByIntent?: { sell|buy|rent: {en,hi} },
  *   options?: Array<{ value, label:{en,hi} }>,
  *   optionsByAnswer?: { <depSlotId>: { <value>: options[] } }, // dynamic options
+ *   allowCustom?: boolean,            // user may type a value not in options
  *   unit?: string[], min?, max?,
  *   prefillFromProfile?: 'phone',
  *   appliesToIntent?: string[],       // slot only applies for these intents
@@ -106,6 +107,7 @@ const slots = [
     inputType: 'choice',
     required: true,
     appliesToIntent: ['sell'],
+    allowCustom: true, // "Other" → let the user type the exact type
     question: {
       en: 'What type of property is it?',
       hi: 'Property ka type kya hai?'
@@ -119,6 +121,7 @@ const slots = [
     inputType: 'choice',
     required: true,
     appliesToIntent: ['buy', 'rent'],
+    allowCustom: true, // real world has more types than the 5 presets
     question: { en: 'What type of property is it?', hi: 'Kis type ki property hai?' },
     questionByIntent: {
       buy: { en: 'What type of property are you looking for?', hi: 'Aap kis type ki property dhoond rahe hain?' },
@@ -144,6 +147,7 @@ const slots = [
       propertyTypeDetailed: ['Apartment / Flat', 'Villa', 'Independent House', 'Row House', 'Studio Apartment', 'Penthouse', 'Duplex', 'Serviced Apartment']
     },
     branchMatch: 'any', // matches if EITHER propertyType or propertyTypeDetailed qualifies
+    allowCustom: true, // e.g. 1RK, studio, 2.5BHK, 5BHK — presets aren't exhaustive
     question: { en: 'How many BHK?', hi: 'Kitne BHK ka hai?' },
     questionByIntent: {
       sell: { en: 'How many BHK is it?', hi: 'Kitne BHK ka hai?' },
@@ -151,6 +155,7 @@ const slots = [
       rent: { en: 'How many BHK?', hi: 'Kitne BHK ka hai?' }
     },
     options: [
+      { value: '1RK', label: { en: '1 RK', hi: '1 RK' } },
       { value: '1BHK', label: { en: '1 BHK', hi: '1 BHK' } },
       { value: '2BHK', label: { en: '2 BHK', hi: '2 BHK' } },
       { value: '3BHK', label: { en: '3 BHK', hi: '3 BHK' } },
@@ -288,6 +293,7 @@ const slots = [
     inputType: 'multichoice',
     required: false,
     skippable: true,
+    allowCustom: true, // presets are a subset of 60+ — let users add their own
     appliesToIntent: ['sell'],
     question: { en: 'Select key amenities (optional).', hi: 'Key amenities chunein (optional).' },
     options: KEY_AMENITIES
