@@ -27,6 +27,9 @@ router.get("/my-agents", restrictTo('captain'), (req, res) => ProjectController.
 // Assign captain to project (admin only)
 router.put("/:projectId/assign-captain", restrictTo('admin'), (req, res) => ProjectController.assignCaptain(req, res));
 
+// Add/remove a co-captain (second captain) on a project (admin only)
+router.put("/:projectId/assign-co-captain", restrictTo('admin'), (req, res) => ProjectController.assignCoCaptain(req, res));
+
 // Assign agent to project (captain only)
 router.put("/:projectId/assign-agent", restrictTo('captain'), (req, res) => ProjectController.assignAgent(req, res));
 

@@ -187,6 +187,68 @@ class ProjectService {
 
     return updatedProject;
   }
+
+  /**
+   * Add or remove a co-captain (second/additional captain) on a project.
+   * @param {string} projectId
+   * @param {string} captainId - captain to add or remove
+   * @param {'add'|'remove'} action
+   */
+  async assignCoCaptainToProject(projectId, captainId, action = 'add') {
+    // 1. Fetch existing project
+    const project = await ProjectRepository.getById(projectId);
+    if (!project) throw new Error('Project not found');
+    if (!captainId) throw new Error('captainId is required');
+
+    // 2. Validate it's a real captain
+    const captain = await User.findById(captainId).lean();
+    if (!captain || captain.role !== 'captain') {
+      throw new Error('Invalid captain');
+    }
+
+    // 3. The co-captain can't be the primary owner
+    const ownerId = project.owner
+      ? (typeof project.owner === 'object' ? project.owner._id?.toString() || project.owner.id?.toString() : project.owner.toString())
+      : null;
+    if (action === 'add' && ownerId && ownerId === captainId.toString()) {
+      throw new Error('This captain is already the primary captain of the project');
+    }
+
+    // 4. Current co-captain ids
+    const currentCoCaptains = (project.coCaptains || []).map((c) =>
+      typeof c === 'object' ? (c._id?.toString() || c.id?.toString()) : c.toString()
+    );
+
+    let nextCoCaptains;
+    if (action === 'remove') {
+      nextCoCaptains = currentCoCaptains.filter((id) => id !== captainId.toString());
+    } else {
+      if (currentCoCaptains.includes(captainId.toString())) {
+        return project; // already a co-captain — idempotent
+      }
+      nextCoCaptains = [...currentCoCaptains, captainId.toString()];
+    }
+
+    const updatedProject = await ProjectRepository.update(projectId, { coCaptains: nextCoCaptains });
+
+    // 5. Notify (fire-and-forget)
+    try {
+      const projectName = updatedProject.projectName || project.projectName || 'Unnamed Project';
+      await Notification.create({
+        recipient: captainId,
+        type: 'system',
+        title: action === 'add' ? 'Project Co-Assigned' : 'Project Co-Assignment Removed',
+        message: action === 'add'
+          ? `You have been added as a co-captain on project: ${projectName}`
+          : `You have been removed as a co-captain from project: ${projectName}`,
+        reference: { model: 'Project', id: projectId }
+      });
+    } catch (notifError) {
+      console.error('Failed to create co-captain notification:', notifError);
+    }
+
+    return updatedProject;
+  }
 }
 
 module.exports = new ProjectService();
