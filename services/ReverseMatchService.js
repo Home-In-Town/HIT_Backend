@@ -19,12 +19,13 @@ const ExtractedLead = require('../models/ExtractedLead');
 const Notification = require('../models/Notification');
 const User = require('../models/User');
 const locationNormalizer = require('./LocationNormalizer');
+const propertyTypeNormalizer = require('./PropertyTypeNormalizer');
 const Logger = require('../utils/logger');
 
 const logger = new Logger('ReverseMatch');
 
-// How far back to look for matching leads
-const LOOKBACK_DAYS = 15;
+// How far back to look for matching leads (6 months).
+const LOOKBACK_DAYS = 180;
 // Minimum score to consider a reverse match valid
 const MIN_REVERSE_SCORE = 35;
 // Max leads to check per project publish (performance guard)
@@ -92,6 +93,12 @@ class ReverseMatchService {
       // Step 4: Notify original agents
       await this._notifyAgents(validMatches, project, io);
 
+      // Step 4.5: Auto-create/join the project sub-group for each matched agent,
+      // mirroring the forward path (LeadCaptureService). This pulls the original
+      // requester into a deal room automatically when matching inventory is
+      // published later — closing the loop for "requirement now, inventory later".
+      await this._createSubGroupsForMatches(validMatches, project, io);
+
       // Step 5: Notify admins
       await this._notifyAdmins(validMatches, project, io);
 
@@ -134,15 +141,38 @@ class ReverseMatchService {
       ];
     }
 
-    // Narrow by BHK if project has bhkOptions
-    if (project.configuration?.bhkOptions?.length > 0) {
+    // Narrow by BHK when the project is a BHK-bearing type (flats/villas).
+    // IMPORTANT: never hard-exclude leads that have no BHK — plot / farm-land /
+    // mixed-use buyers legitimately post requirements without a BHK, and a
+    // land/plot project has no meaningful bhkOptions to filter on. So the BHK
+    // narrowing is only an OPTIMISATION arm, always OR'd with "no BHK on lead".
+    const projType = propertyTypeNormalizer.fromProject(project);
+    const projectIsLand = ['plot', 'farm_land', 'commercial_plot'].includes(projType.family);
+
+    if (!projectIsLand && project.configuration?.bhkOptions?.length > 0) {
       const bhkNumbers = project.configuration.bhkOptions
         .map(opt => opt.match(/(\d)/))
         .filter(Boolean)
         .map(m => `${m[1]}BHK`);
+      // Include adjacent BHK so a 2BHK project still surfaces 1/3 BHK leads
+      // (scoring gives them partial credit, same as the forward engine).
+      const withAdjacent = new Set();
+      for (const b of bhkNumbers) {
+        const n = parseInt(b);
+        withAdjacent.add(`${n}BHK`);
+        if (n - 1 >= 1) withAdjacent.add(`${n - 1}BHK`);
+        withAdjacent.add(`${n + 1}BHK`);
+      }
 
-      if (bhkNumbers.length > 0) {
-        filter['params.bhkType'] = { $in: bhkNumbers };
+      if (withAdjacent.size > 0) {
+        const bhkClause = {
+          $or: [
+            { 'params.bhkType': { $in: [...withAdjacent] } },
+            { 'params.bhkType': { $exists: false } },
+            { 'params.bhkType': null }
+          ]
+        };
+        filter.$and = (filter.$and || []).concat([bhkClause]);
       }
     }
 
@@ -177,14 +207,22 @@ class ReverseMatchService {
 
   /**
    * Score a single lead's params against a project.
-   * Same logic as MatchEngineV2 but reversed: project is fixed, leads vary.
+   *
+   * Weights are kept IN SYNC with MatchEngineV2._calculateScore so that a given
+   * (lead, project) pair scores identically whether it was surfaced by forward
+   * matching (requirement → projects) or reverse matching (project → leads):
+   *
+   *   budget 28 | location 28 | propertyType 18 | bhk 14 (skipped for land)
+   *   loan 6    | possession 6 | verified +3    | rera +2   | capped at 100
+   *
+   * Plus a location penalty when the lead names a location that doesn't match.
    */
   _calculateReverseScore(params, project) {
     const breakdown = {};
     const matchedOn = [];
     let total = 0;
 
-    // === Budget Match (30 points) ===
+    // === Budget Match (28 points) ===
     if (params.budget && project.pricing?.startingPrice) {
       const reqBudget = params.budget * 100000; // lakhs → value
       const reqBudgetMax = params.budgetMax ? params.budgetMax * 100000 : reqBudget * 1.1;
@@ -194,14 +232,16 @@ class ReverseMatchService {
       const isInRange = projPrice >= (reqBudget * 0.8) && projPrice <= (reqBudgetMax * 1.2);
       if (isInRange) {
         const diff = Math.abs(reqBudget - projPrice) / reqBudget;
-        if (diff <= 0.05) { total += 30; breakdown.budget = 30; }
-        else if (diff <= 0.10) { total += 26; breakdown.budget = 26; }
-        else if (diff <= 0.15) { total += 20; breakdown.budget = 20; }
-        else if (diff <= 0.20) { total += 14; breakdown.budget = 14; }
-        else { total += 8; breakdown.budget = 8; }
+        if (diff <= 0.05) { total += 28; breakdown.budget = 28; }
+        else if (diff <= 0.10) { total += 24; breakdown.budget = 24; }
+        else if (diff <= 0.15) { total += 19; breakdown.budget = 19; }
+        else if (diff <= 0.20) { total += 13; breakdown.budget = 13; }
+        else { total += 7; breakdown.budget = 7; }
         matchedOn.push('budget');
       }
     }
+
+    // === Location Match (28 points) ===
     const locationScore = this._scoreLocation(params, project);
     if (locationScore > 0) {
       total += locationScore;
@@ -209,8 +249,25 @@ class ReverseMatchService {
       matchedOn.push('location');
     }
 
-    // === BHK Match (20 points) ===
-    if (params.bhkType && project.configuration?.bhkOptions?.length) {
+    // === Property Type Match (18 points) ===
+    // Mirrors MatchEngineV2._scorePropertyType: neutral small score when the
+    // lead gives no type, graded score otherwise (handles mixed-use, plots,
+    // related families). This is what previously made reverse matching notify
+    // e.g. a plot buyer about a flat — now type relevance is factored in.
+    const typeResult = propertyTypeNormalizer.matchScore(params.propertyType, project);
+    if (typeResult.score === null) {
+      total += 4;
+      breakdown.propertyType = 4; // type_neutral
+    } else {
+      const points = Math.round(typeResult.score * 18);
+      total += points;
+      breakdown.propertyType = points;
+      if (points > 0) matchedOn.push(`type_${typeResult.method}`);
+    }
+
+    // === BHK Match (14 points) — skipped for land/plot/mixed-use requirements ===
+    const reqIsLand = params.propertyType && propertyTypeNormalizer.isLandType(params.propertyType);
+    if (!reqIsLand && params.bhkType && project.configuration?.bhkOptions?.length) {
       const reqBhk = params.bhkType.toLowerCase().replace(/\s+/g, '');
       const bhkNum = parseInt(reqBhk);
 
@@ -220,8 +277,8 @@ class ReverseMatchService {
       );
 
       if (exactMatch) {
-        total += 20;
-        breakdown.bhk = 20;
+        total += 14;
+        breakdown.bhk = 14;
         matchedOn.push('bhk');
       } else {
         // Adjacent BHK
@@ -230,24 +287,24 @@ class ReverseMatchService {
           return !isNaN(optNum) && Math.abs(optNum - bhkNum) === 1;
         });
         if (adjacentMatch) {
-          total += 8;
-          breakdown.bhk = 8;
+          total += 6;
+          breakdown.bhk = 6;
           matchedOn.push('bhk_adjacent');
         }
       }
     }
 
-    // === Loan Match (8 points) ===
+    // === Loan Match (6 points) ===
     if (params.loanRequired && project.pricing?.bankLoanAvailable) {
-      total += 8;
-      breakdown.loan = 8;
+      total += 6;
+      breakdown.loan = 6;
       matchedOn.push('loan');
     } else if (!params.loanRequired) {
-      total += 4;
-      breakdown.loan = 4;
+      total += 3;
+      breakdown.loan = 3;
     }
 
-    // === Possession Match (7 points) ===
+    // === Possession Match (6 points) ===
     if (params.possessionNeeded && project.projectStatus) {
       const possessionMap = {
         'immediate': ['ready-to-move', 'completed', 'ready', 'possession-ready'],
@@ -258,8 +315,8 @@ class ReverseMatchService {
       const validStatuses = possessionMap[params.possessionNeeded] || [];
       const projectStatus = project.projectStatus.toLowerCase().replace(/\s+/g, '-');
       if (validStatuses.some(s => projectStatus.includes(s))) {
-        total += 7;
-        breakdown.possession = 7;
+        total += 6;
+        breakdown.possession = 6;
         matchedOn.push('possession');
       }
     }
@@ -308,13 +365,70 @@ class ReverseMatchService {
 
     if (!result.matches) return 0;
 
+    // Kept in sync with MatchEngineV2._scoreLocation.
     switch (result.method) {
-      case 'canonical_match': return 30;
-      case 'geo_proximity_2km': return 28;
-      case 'geo_proximity_5km': return 20;
-      case 'substring_fallback': return 15;
-      case 'trigram_similarity': return 12;
-      default: return 10;
+      case 'canonical_match': return 28;
+      case 'geo_proximity_2km': return 26;
+      case 'geo_proximity_5km': return 19;
+      case 'substring_fallback': return 14;
+      case 'trigram_similarity': return 11;
+      default: return 9;
+    }
+  }
+
+  // ─── Step 4.5: Auto-create / join project sub-groups ───────────────────────
+
+  /**
+   * For each matched agent, ensure a project sub-group exists and add the agent
+   * to it — the same behaviour the forward path already provides. Non-blocking:
+   * a sub-group failure for one agent never aborts the others or the publish.
+   *
+   * Only requirement-type leads get a sub-group (an inventory lead being matched
+   * against new inventory shouldn't pull the poster into the seller's deal room),
+   * mirroring the `intent !== 'inventory'` guard in LeadCaptureService.
+   *
+   * @param {Array} matches - validated reverse matches ({ lead, score, ... })
+   * @param {object} project - the published project (owner populated)
+   * @param {object} [io] - Socket.io instance
+   */
+  async _createSubGroupsForMatches(matches, project, io) {
+    try {
+      const { findOrCreateProjectSubGroup } = require('./UniversalGroupService');
+
+      // De-duplicate by agent so each matched agent is added at most once, even
+      // if they had multiple matching leads for this project.
+      const seenAgents = new Set();
+
+      for (const match of matches) {
+        const lead = match.lead;
+        if (!lead || !lead.extractedBy) continue;
+
+        // Skip inventory leads — only buyers/requirements join the deal room.
+        if (lead.intent === 'inventory') continue;
+
+        const agentId = (lead.extractedBy._id || lead.extractedBy).toString();
+        if (seenAgents.has(agentId)) continue;
+        seenAgents.add(agentId);
+
+        // Don't add the project owner to their own project sub-group.
+        const ownerId = (project.owner?._id || project.owner)?.toString();
+        if (ownerId && agentId === ownerId) continue;
+
+        try {
+          await findOrCreateProjectSubGroup(project, agentId, io);
+        } catch (err) {
+          logger.error('Reverse sub-group creation failed (non-blocking)', {
+            error: err.message,
+            projectId: project._id,
+            agentId
+          });
+        }
+      }
+    } catch (err) {
+      logger.error('Reverse sub-group step failed (non-blocking)', {
+        error: err.message,
+        projectId: project?._id
+      });
     }
   }
 
@@ -427,25 +541,57 @@ class ReverseMatchService {
 
   async _updateLeadsWithReverseMatch(matches, project) {
     try {
-      const bulkOps = matches.map(match => ({
-        updateOne: {
-          filter: { _id: match.lead._id },
-          update: {
-            $push: {
-              matches: {
-                project: project._id,
-                score: match.score,
-                confidence: match.score / 100,
-                matchedOn: match.matchedOn
-              }
-            },
-            $inc: { matchCount: 1 },
-            $max: { bestMatchScore: match.score }
-          }
-        }
-      }));
+      // Idempotent per (lead, project): if this project is already recorded on
+      // the lead (e.g. the project was published earlier and is now being
+      // edited), refresh that match entry in place instead of pushing a
+      // duplicate and inflating matchCount. Only brand-new (lead, project) pairs
+      // increment matchCount. This makes repeated edits on a published project
+      // safe to re-run without bloating the lead's match history.
+      const projectId = project._id;
 
-      await ExtractedLead.bulkWrite(bulkOps);
+      const bulkOps = matches.map(match => {
+        const existing = Array.isArray(match.lead.matches)
+          ? match.lead.matches.some(m => m.project && m.project.toString() === projectId.toString())
+          : false;
+
+        if (existing) {
+          // Update the existing array element for this project.
+          return {
+            updateOne: {
+              filter: { _id: match.lead._id, 'matches.project': projectId },
+              update: {
+                $set: {
+                  'matches.$.score': match.score,
+                  'matches.$.confidence': match.score / 100,
+                  'matches.$.matchedOn': match.matchedOn
+                },
+                $max: { bestMatchScore: match.score }
+              }
+            }
+          };
+        }
+
+        // First time this lead sees this project — push + count.
+        return {
+          updateOne: {
+            filter: { _id: match.lead._id },
+            update: {
+              $push: {
+                matches: {
+                  project: projectId,
+                  score: match.score,
+                  confidence: match.score / 100,
+                  matchedOn: match.matchedOn
+                }
+              },
+              $inc: { matchCount: 1 },
+              $max: { bestMatchScore: match.score }
+            }
+          }
+        };
+      });
+
+      if (bulkOps.length > 0) await ExtractedLead.bulkWrite(bulkOps);
     } catch (err) {
       logger.error('Failed to update leads with reverse match', { error: err.message });
     }

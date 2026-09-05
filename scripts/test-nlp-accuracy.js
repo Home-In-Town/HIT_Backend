@@ -318,9 +318,9 @@ runCategory('6. Budget Extraction', [
   },
   {
     input: 'need 2bhk around 60 lakh manish nagar',
-    description: 'around 60L (±10%)',
-    expected: 'min:54, max:66, flexible',
-    validate: (r) => r?.params?.budget === 54 && r?.params?.budgetMax === 66 && r?.params?.budgetFlexible === true
+    description: 'around 60L (anchor 60, +10% widening)',
+    expected: 'budget:60, max:66, flexible',
+    validate: (r) => r?.params?.budget === 60 && r?.params?.budgetMax === 66 && r?.params?.budgetFlexible === true
   },
   {
     input: 'need 2bhk upto 70 lakh manish nagar',
