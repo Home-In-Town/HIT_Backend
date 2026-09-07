@@ -1,5 +1,6 @@
 const GroupRoom = require('../models/GroupRoom');
 const User = require('../models/User');
+const propertyTypeNormalizer = require('./PropertyTypeNormalizer');
 
 /**
  * UniversalGroupService
@@ -11,6 +12,73 @@ const User = require('../models/User');
  */
 
 const UNIVERSAL_GROUP_NAME = 'HIT Community';
+
+/**
+ * Format a stored sqft size into a human-friendly string. Sizes are stored in
+ * sqft (see the upload form / matcher), but for land the seller thinks in acres,
+ * so we surface an approximate acre value alongside large sqft figures.
+ *
+ * "217800 sqft"        → "217800 sqft (≈ 5 acre)"
+ * "900 - 5000 sqft"    → "900 - 5000 sqft"
+ * "1200"               → "1200 sqft"
+ */
+function _formatSize(raw) {
+  if (!raw || typeof raw !== 'string') return '';
+  const nums = (raw.match(/\d+(?:\.\d+)?/g) || []).map(Number).filter(n => n > 0);
+  if (nums.length === 0) return raw.trim();
+
+  const base = /sq\.?\s*ft|sqft/i.test(raw) ? raw.trim() : `${raw.trim()} sqft`;
+
+  // Add an acre hint when the size is large enough that acres are the natural unit.
+  const max = Math.max(...nums);
+  if (max >= 20000) {
+    const acres = (max / 43560);
+    const acreStr = acres >= 10 ? Math.round(acres) : acres.toFixed(2).replace(/\.?0+$/, '');
+    return `${base} (≈ ${acreStr} acre)`;
+  }
+  return base;
+}
+
+/**
+ * Build the pinned "project details" system message, TYPE-AWARE:
+ *   - Land / plot / farm types → show plot size (with acre hint), not BHK.
+ *   - BHK-bearing types (flat/villa/etc.) → show BHK config.
+ *   - Mixed use → show whichever size/config is present.
+ * Kept in one place so both creation and refresh render identical content.
+ */
+function buildProjectInfoMessage(project) {
+  const typeInfo = propertyTypeNormalizer.fromProject(project);
+  const isLand = ['plot', 'farm_land', 'commercial_plot'].includes(typeInfo.family);
+
+  const plotSize = project.configuration?.plotSizeRange;
+  const carpet = project.configuration?.carpetAreaRange;
+  const bhk = project.configuration?.bhkOptions;
+
+  const lines = [
+    `📋 Project: ${project.projectName}`,
+    `📍 Location: ${project.location || ''}, ${project.city || ''}`,
+    project.propertyType ? `🏷️ Type: ${project.propertyType}` : '',
+    project.pricing?.startingPrice ? `💰 Starting Price: ₹${(project.pricing.startingPrice / 100000).toFixed(0)}L` : '',
+  ];
+
+  if (isLand) {
+    // Land/plot/farm: size is the meaningful spec, never BHK.
+    const size = _formatSize(plotSize || carpet);
+    if (size) lines.push(`📐 Plot Size: ${size}`);
+  } else {
+    // Built-up: prefer BHK config, and include carpet area when present.
+    if (bhk?.length) lines.push(`🏠 Config: ${bhk.join(', ')}`);
+    if (carpet) lines.push(`📐 Carpet Area: ${_formatSize(carpet)}`);
+    // A non-land project may still carry a plot size (e.g. villa) — show it.
+    if (plotSize) lines.push(`📐 Plot Size: ${_formatSize(plotSize)}`);
+  }
+
+  lines.push(project.reraNumber ? `📊 RERA: ${project.reraNumber}` : '');
+  lines.push(project.projectStatus ? `🔄 Status: ${project.projectStatus}` : '');
+  lines.push(project.pricing?.bankLoanAvailable ? '🏦 Bank Loan Available' : '');
+
+  return lines.filter(Boolean).join('\n');
+}
 
 /**
  * Ensure the universal group exists. Called on server startup.
@@ -142,22 +210,14 @@ async function findOrCreateProjectSubGroup(project, agentId, io) {
     if (!existingMsg) {
       isNew = true;
 
-      // Post project details as system message
-      const projectInfo = [
-        `📋 Project: ${project.projectName}`,
-        `📍 Location: ${project.location || ''}, ${project.city || ''}`,
-        project.pricing?.startingPrice ? `💰 Starting Price: ₹${(project.pricing.startingPrice / 100000).toFixed(0)}L` : '',
-        project.configuration?.bhkOptions?.length ? `🏠 Config: ${project.configuration.bhkOptions.join(', ')}` : '',
-        project.reraNumber ? `📊 RERA: ${project.reraNumber}` : '',
-        project.projectStatus ? `🔄 Status: ${project.projectStatus}` : '',
-        project.pricing?.bankLoanAvailable ? '🏦 Bank Loan Available' : ''
-      ].filter(Boolean).join('\n');
-
+      // Post project details as system message (type-aware — see builder).
+      // Content starts with the "📋 Project:" marker so it can be located and
+      // refreshed later when the project is edited (see refreshProjectSubGroupPin).
       await GroupMessage.create({
         room: room._id,
         sender: ownerId,
         messageType: 'system',
-        content: projectInfo
+        content: buildProjectInfoMessage(project)
       });
     }
   }
@@ -203,11 +263,85 @@ async function findOrCreateProjectSubGroup(project, agentId, io) {
   return { room, isNew, alreadyMember };
 }
 
+/**
+ * Refresh the pinned project-details system message for a project's sub-group.
+ *
+ * The pin is written once at sub-group creation and would otherwise freeze the
+ * project's state at that moment (stale price, old BHK, missing plot size). Call
+ * this whenever the project is edited so the pin reflects current details.
+ *
+ * Non-blocking / idempotent: does nothing if no sub-group exists; updates the
+ * existing "📋 Project:" system message in place, or creates one if missing.
+ *
+ * @param {object} project - The project (should include configuration, pricing,
+ *   propertyType, projectStatus). Owner id used as the system-message sender.
+ * @param {object} [io] - Socket.io instance to broadcast the update.
+ * @returns {Promise<boolean>} true if a pin was updated/created.
+ */
+async function refreshProjectSubGroupPin(project, io) {
+  try {
+    if (!project?._id) return false;
+
+    const room = await GroupRoom.findOne({
+      project: project._id,
+      roomType: 'project',
+      isAutoCreated: true,
+      active: true
+    });
+    if (!room) return false; // No sub-group yet — nothing to refresh.
+
+    const GroupMessage = require('../models/GroupMessage');
+    const newContent = buildProjectInfoMessage(project);
+
+    // Locate the pinned details message: earliest system message that starts
+    // with the "📋 Project:" marker.
+    const pin = await GroupMessage.findOne({
+      room: room._id,
+      messageType: 'system',
+      content: { $regex: '^📋 Project:' }
+    }).sort({ createdAt: 1 });
+
+    let messageId;
+    if (pin) {
+      if (pin.content !== newContent) {
+        pin.content = newContent;
+        await pin.save();
+      }
+      messageId = pin._id;
+    } else {
+      const ownerId = project.owner?._id?.toString() || project.owner?.toString();
+      const created = await GroupMessage.create({
+        room: room._id,
+        sender: ownerId,
+        messageType: 'system',
+        content: newContent
+      });
+      messageId = created._id;
+    }
+
+    // Broadcast so open clients re-render the pin.
+    if (io) {
+      io.to(`group_${room._id}`).emit('project_info_updated', {
+        roomId: room._id.toString(),
+        messageId: messageId?.toString(),
+        content: newContent
+      });
+    }
+
+    return true;
+  } catch (err) {
+    console.error('refreshProjectSubGroupPin error (non-blocking):', err.message);
+    return false;
+  }
+}
+
 module.exports = {
   ensureUniversalGroup,
   getUniversalGroup,
   addUserToUniversalGroup,
   findOrCreateProjectSubGroup,
+  refreshProjectSubGroupPin,
+  buildProjectInfoMessage,
   clearCache,
   UNIVERSAL_GROUP_NAME
 };
