@@ -743,14 +743,18 @@ class NLPExtractor {
       if (match) {
         const value = this._parseBudgetValue(parseFloat(match[1]), match[2]);
         if (/upto|up\s*to|tak|maximum|max/i.test(match[0])) {
-          min = null;
+          // "upto 70L" — 70 is the ceiling. Anchor budget at the stated value so
+          // scoring treats it as the target, with the same value as the max.
+          min = value;
           max = value;
         } else if (/minimum|min|kam\s*se\s*kam|atleast/i.test(match[0])) {
           min = value;
           max = null;
         } else {
-          // "around" — create a ±10% range
-          min = Math.round(value * 0.9);
+          // "around 55L" — 55 is the target. Keep budget anchored at the stated
+          // value (NOT shifted down); express the tolerance via budgetMax so the
+          // ±10% band widens the DB net without moving the scoring anchor.
+          min = value;
           max = Math.round(value * 1.1);
         }
         flexible = true;

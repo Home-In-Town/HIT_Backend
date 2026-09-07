@@ -100,6 +100,25 @@ class ProjectController {
       // Notify OneEmployee (fire-and-forget)
       notifyProjectUpdate(project.owner, project._id, 'updated', project.projectName);
 
+      // Fire-and-forget: if the edited project is (still) published, re-run reverse
+      // matching so detail changes (price, location, type, BHK) surface freshly
+      // matching buyer leads and pull those agents into the project sub-group.
+      // Draft/unpublished edits are skipped — only live inventory should match.
+      if (project.status === 'published') {
+        const projectId = project.id || project._id;
+        Project.findById(projectId)
+          .populate('owner', 'name companyName role verificationStatus')
+          .lean()
+          .then(fullProject => {
+            if (!fullProject) return;
+            const io = req.app.get('io');
+            return reverseMatchService.onProjectPublished(fullProject, io);
+          })
+          .catch(err => {
+            console.error('ReverseMatch (update) non-blocking error:', err.message);
+          });
+      }
+
       res.json(project);
     } catch (error) {
       if (error.name === 'ValidationError') {

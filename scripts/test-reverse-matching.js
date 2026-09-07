@@ -292,35 +292,35 @@ runCategory('1. Perfect Matches (High Score Expected)', [
 
 runCategory('2. Budget Scoring', [
   {
-    description: 'Exact budget match: 55L lead vs 55L project → 30 pts',
-    expected: 'budget = 30',
+    description: 'Exact budget match: 55L lead vs 55L project → 28 pts',
+    expected: 'budget = 28',
     validate: () => {
       const result = score({ bhkType: '2BHK', budget: 55, location: 'manish_nagar', locationRaw: 'Manish Nagar' }, PROJECTS.greenHeights);
-      return result.breakdown.budget === 30;
+      return result.breakdown.budget === 28;
     }
   },
   {
-    description: 'Within 10%: 60L lead vs 55L project → 26 pts',
-    expected: 'budget = 26',
+    description: 'Within 10%: 60L lead vs 55L project → 24 pts',
+    expected: 'budget = 24',
     validate: () => {
       const result = score({ bhkType: '2BHK', budget: 60, location: 'manish_nagar', locationRaw: 'Manish Nagar' }, PROJECTS.greenHeights);
-      return result.breakdown.budget === 26;
+      return result.breakdown.budget === 24;
     }
   },
   {
-    description: 'Within 15%: 65L lead vs 55L project → 20 pts',
-    expected: 'budget = 14 (18% diff → within 20% band)',
+    description: 'Within 20%: 65L lead vs 55L project → 13 pts',
+    expected: 'budget = 13 (15.4% diff → within 20% band)',
     validate: () => {
       const result = score({ bhkType: '2BHK', budget: 65, location: 'manish_nagar', locationRaw: 'Manish Nagar' }, PROJECTS.greenHeights);
-      return result.breakdown.budget === 14; // diff is (65-55)/65 = 15.4% → actually recalculated from reqBudget: (6500000-5500000)/6500000 = 15.4% → ≤20% band = 14
+      return result.breakdown.budget === 13; // (6500000-5500000)/6500000 = 15.4% → ≤20% band = 13
     }
   },
   {
     description: 'Budget range 50-60L vs 55L project → should match (in range)',
-    expected: 'budget >= 14',
+    expected: 'budget >= 13',
     validate: () => {
       const result = score(LEADS.budgetRange.params, PROJECTS.greenHeights);
-      return result.breakdown.budget >= 14;
+      return result.breakdown.budget >= 13;
     }
   },
   {
@@ -339,27 +339,27 @@ runCategory('2. Budget Scoring', [
 
 runCategory('3. Location Scoring', [
   {
-    description: 'Exact location: "Manish Nagar" lead vs "Manish Nagar" project → 30 pts',
-    expected: 'location = 30',
+    description: 'Exact location: "Manish Nagar" lead vs "Manish Nagar" project → 28 pts',
+    expected: 'location = 28',
     validate: () => {
       const result = score({ bhkType: '2BHK', budget: 55, location: 'manish_nagar', locationRaw: 'Manish Nagar' }, PROJECTS.greenHeights);
-      return result.breakdown.location === 30;
+      return result.breakdown.location === 28;
     }
   },
   {
-    description: 'Fuzzy location: "near Manish Nagar" lead vs project → 30 pts (canonical match)',
-    expected: 'location = 30',
+    description: 'Fuzzy location: "near Manish Nagar" lead vs project → 28 pts (canonical match)',
+    expected: 'location = 28',
     validate: () => {
       const result = score({ bhkType: '2BHK', budget: 55, location: 'manish_nagar', locationRaw: 'near Manish Nagar' }, PROJECTS.greenHeights);
-      return result.breakdown.location === 30;
+      return result.breakdown.location === 28;
     }
   },
   {
     description: 'Wardha Road lead vs Wardha Road project → match',
-    expected: 'location >= 20',
+    expected: 'location >= 19',
     validate: () => {
       const result = score(LEADS.wardhaReq.params, PROJECTS.skylineWardha);
-      return result.breakdown.location >= 20;
+      return result.breakdown.location >= 19;
     }
   },
   {
@@ -386,35 +386,35 @@ runCategory('3. Location Scoring', [
 
 runCategory('4. BHK Scoring', [
   {
-    description: '2BHK lead vs project with [1BHK, 2BHK, 3BHK] → 20 pts (exact)',
-    expected: 'bhk = 20',
+    description: '2BHK lead vs project with [1BHK, 2BHK, 3BHK] → 14 pts (exact)',
+    expected: 'bhk = 14',
     validate: () => {
       const result = score({ bhkType: '2BHK', budget: 55, location: 'manish_nagar', locationRaw: 'Manish Nagar' }, PROJECTS.greenHeights);
-      return result.breakdown.bhk === 20;
+      return result.breakdown.bhk === 14;
     }
   },
   {
-    description: '3BHK lead vs project with [2BHK, 3BHK] → 20 pts (exact)',
-    expected: 'bhk = 20',
+    description: '3BHK lead vs project with [2BHK, 3BHK] → 14 pts (exact)',
+    expected: 'bhk = 14',
     validate: () => {
       const result = score(LEADS.immediateReq.params, PROJECTS.skylineWardha);
-      return result.breakdown.bhk === 20;
+      return result.breakdown.bhk === 14;
     }
   },
   {
-    description: '4BHK lead vs project with [1BHK, 2BHK, 3BHK] → 8 pts (adjacent: 3BHK is close)',
-    expected: 'bhk = 8',
+    description: '4BHK lead vs project with [1BHK, 2BHK, 3BHK] → 6 pts (adjacent: 3BHK is close)',
+    expected: 'bhk = 6',
     validate: () => {
       const result = score(LEADS.bhkMismatch.params, PROJECTS.greenHeights);
-      return result.breakdown.bhk === 8;
+      return result.breakdown.bhk === 6;
     }
   },
   {
-    description: '4BHK lead vs project with [3BHK, 4BHK] → 20 pts (exact)',
-    expected: 'bhk = 20',
+    description: '4BHK lead vs project with [3BHK, 4BHK] → 14 pts (exact)',
+    expected: 'bhk = 14',
     validate: () => {
       const result = score(LEADS.premiumReq.params, PROJECTS.premiumCivil);
-      return result.breakdown.bhk === 20;
+      return result.breakdown.bhk === 14;
     }
   },
 ]);
@@ -425,27 +425,27 @@ runCategory('4. BHK Scoring', [
 
 runCategory('5. Possession Scoring', [
   {
-    description: 'Immediate need vs ready-to-move project → 7 pts',
-    expected: 'possession = 7',
+    description: 'Immediate need vs ready-to-move project → 6 pts',
+    expected: 'possession = 6',
     validate: () => {
       const result = score(LEADS.immediateReq.params, PROJECTS.skylineWardha);
-      return result.breakdown.possession === 7;
+      return result.breakdown.possession === 6;
     }
   },
   {
-    description: '6months need vs nearing-completion project → 7 pts',
-    expected: 'possession = 7',
+    description: '6months need vs nearing-completion project → 6 pts',
+    expected: 'possession = 6',
     validate: () => {
       const result = score(LEADS.besaReq.params, PROJECTS.besaBudget);
-      return result.breakdown.possession === 7;
+      return result.breakdown.possession === 6;
     }
   },
   {
-    description: '2year need vs pre-launch project → 7 pts',
-    expected: 'possession = 7',
+    description: '2year need vs pre-launch project → 6 pts',
+    expected: 'possession = 6',
     validate: () => {
       const result = score(LEADS.villaReq.params, PROJECTS.pratapVilla);
-      return result.breakdown.possession === 7;
+      return result.breakdown.possession === 6;
     }
   },
   {
@@ -464,19 +464,19 @@ runCategory('5. Possession Scoring', [
 
 runCategory('6. Loan + Bonus Scoring', [
   {
-    description: 'Loan required + project has loan → 8 pts',
-    expected: 'loan = 8',
+    description: 'Loan required + project has loan → 6 pts',
+    expected: 'loan = 6',
     validate: () => {
       const result = score(LEADS.perfectMatch.params, PROJECTS.greenHeights);
-      return result.breakdown.loan === 8;
+      return result.breakdown.loan === 6;
     }
   },
   {
-    description: 'Loan not required → 4 pts (neutral bonus)',
-    expected: 'loan = 4',
+    description: 'Loan not required → 3 pts (neutral bonus)',
+    expected: 'loan = 3',
     validate: () => {
       const result = score(LEADS.budgetStretch.params, PROJECTS.greenHeights);
-      return result.breakdown.loan === 4;
+      return result.breakdown.loan === 3;
     }
   },
   {
@@ -607,11 +607,11 @@ runCategory('8. Batch Scoring (Multiple Leads vs 1 Project)', [
 
 runCategory('9. Score Breakdown — Full Decomposition', [
   {
-    description: 'Perfect match: 2BHK 55L Manish Nagar loan=true vs Green Heights → budget(30)+location(30)+bhk(20)+loan(8)+verified(3)+rera(2) = 93',
-    expected: 'total = 93',
+    description: 'Perfect match: 2BHK 55L Manish Nagar loan=true vs Green Heights → budget(28)+location(28)+type(4 neutral)+bhk(14)+loan(6)+verified(3)+rera(2) = 85',
+    expected: 'total = 85',
     validate: () => {
       const result = score(LEADS.perfectMatch.params, PROJECTS.greenHeights);
-      return result.total === 93;
+      return result.total === 85;
     }
   },
   {
@@ -628,11 +628,11 @@ runCategory('9. Score Breakdown — Full Decomposition', [
     }
   },
   {
-    description: 'Immediate+loan Wardha Road vs Skyline → budget(30)+location(30)+bhk(20)+loan(8)+possession(7)+verified(3)+rera(2) = 100 (capped)',
-    expected: 'total = 100',
+    description: 'Immediate+loan Wardha Road vs Skyline → budget(28)+location(28)+type(4 neutral)+bhk(14)+loan(6)+possession(6)+verified(3)+rera(2) = 91',
+    expected: 'total = 91',
     validate: () => {
       const result = score(LEADS.immediateReq.params, PROJECTS.skylineWardha);
-      return result.total === 100;
+      return result.total === 91;
     }
   },
 ]);
@@ -667,11 +667,11 @@ runCategory('10. Edge Cases', [
     }
   },
   {
-    description: 'Completely empty lead params → total = 0',
-    expected: 'total <= 9 (only neutral bonuses)',
+    description: 'Completely empty lead params → only neutral bonuses',
+    expected: 'total <= 12 (type neutral + loan + verified + rera)',
     validate: () => {
       const result = score({}, PROJECTS.greenHeights);
-      return result.total <= 9; // loan(4) + verified(3) + rera(2) = 9
+      return result.total <= 12; // type(4) + loan(3) + verified(3) + rera(2) = 12
     }
   },
   {
@@ -680,6 +680,107 @@ runCategory('10. Edge Cases', [
     validate: () => {
       const result = score(LEADS.immediateReq.params, PROJECTS.skylineWardha);
       return result.total <= 100;
+    }
+  },
+]);
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CATEGORY 11: PROPERTY-TYPE AWARENESS (plot / mixed-use / type mismatch)
+// Regression coverage for the fix that made reverse matching factor in type,
+// so a plot buyer is no longer notified about a flat purely on budget/location.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// A residential PLOT project in Wardha Road (no BHK options — land).
+const PLOT_PROJECT = {
+  _id: 'proj_plot_wardha',
+  projectName: 'Green Acres Plots',
+  projectType: 'plot',
+  propertyType: 'Residential Plot',
+  category: 'Residential',
+  city: 'Nagpur',
+  location: 'Wardha Road',
+  latitude: 21.1100,
+  longitude: 79.1200,
+  reraApproved: true,
+  projectStatus: 'ready-to-move',
+  pricing: { startingPrice: 3000000, bankLoanAvailable: true },
+  configuration: { bhkOptions: [] },
+  owner: { _id: 'builder5', verificationStatus: { builder: 'verified' } }
+};
+
+// A mixed-use project in Wardha Road.
+const MIXED_PROJECT = {
+  _id: 'proj_mixed_wardha',
+  projectName: 'Suvarnabhumi Mixed',
+  projectType: 'plot',
+  propertyType: 'Residential + Commercial Plot',
+  category: 'Mixed Use',
+  city: 'Nagpur',
+  location: 'Wardha Road',
+  latitude: 21.1100,
+  longitude: 79.1200,
+  reraApproved: false,
+  projectStatus: 'under-construction',
+  pricing: { startingPrice: 3000000, bankLoanAvailable: true },
+  configuration: { bhkOptions: [] },
+  owner: { _id: 'builder6', verificationStatus: { builder: 'unverified' } }
+};
+
+// Plot buyer: same location + budget as the plot project, but wants land.
+const PLOT_LEAD = {
+  bhkType: null, budget: 30, budgetMax: null,
+  location: 'wardha_road', locationRaw: 'Wardha Road', city: 'Nagpur',
+  propertyType: 'plot', possessionNeeded: null, loanRequired: true
+};
+
+// Flat buyer: identical location + budget, but wants a flat (should NOT rank
+// high against a pure plot project even though budget+location line up).
+const FLAT_LEAD_SAME_LOC = {
+  bhkType: '2BHK', budget: 30, budgetMax: null,
+  location: 'wardha_road', locationRaw: 'Wardha Road', city: 'Nagpur',
+  propertyType: 'flat', possessionNeeded: null, loanRequired: true
+};
+
+runCategory('11. Property-Type Awareness', [
+  {
+    description: 'Plot buyer vs Plot project → full type credit (18)',
+    expected: 'propertyType = 18',
+    validate: () => {
+      const r = score(PLOT_LEAD, PLOT_PROJECT);
+      return r.breakdown.propertyType === 18;
+    }
+  },
+  {
+    description: 'Plot buyer vs Plot project → BHK skipped for land (no bhk in breakdown)',
+    expected: 'bhk absent/0',
+    validate: () => {
+      const r = score(PLOT_LEAD, PLOT_PROJECT);
+      return !r.breakdown.bhk;
+    }
+  },
+  {
+    description: 'Flat buyer vs Plot project (same loc+budget) → type mismatch drags score below plot buyer',
+    expected: 'flatBuyer.total < plotBuyer.total',
+    validate: () => {
+      const flat = score(FLAT_LEAD_SAME_LOC, PLOT_PROJECT);
+      const plot = score(PLOT_LEAD, PLOT_PROJECT);
+      return flat.total < plot.total;
+    }
+  },
+  {
+    description: 'Plot buyer vs Mixed-Use project → partial type credit (>0)',
+    expected: 'propertyType > 0',
+    validate: () => {
+      const r = score(PLOT_LEAD, MIXED_PROJECT);
+      return r.breakdown.propertyType > 0;
+    }
+  },
+  {
+    description: 'Plot buyer (no BHK) still scores well against plot project → total >= 35',
+    expected: 'total >= 35',
+    validate: () => {
+      const r = score(PLOT_LEAD, PLOT_PROJECT);
+      return r.total >= 35;
     }
   },
 ]);
