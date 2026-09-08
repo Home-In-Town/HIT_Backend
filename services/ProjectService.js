@@ -31,7 +31,22 @@ class ProjectService {
   }
 
   async updateProject(id, data) {
-    return await ProjectRepository.update(id, data);
+    const updates = { ...data };
+
+    // Data hygiene: when a project's type is (or becomes) a land/plot type,
+    // BHK is meaningless. Clear any stale bhkOptions so the pinned sub-group
+    // message and BHK-based matching don't carry leftover values from when the
+    // project was a flat. We only need the incoming propertyType to decide —
+    // if the edit changes the type to land, wipe BHK in the same update.
+    const incomingType = updates.propertyType;
+    if (incomingType) {
+      const propertyTypeNormalizer = require('./PropertyTypeNormalizer');
+      if (propertyTypeNormalizer.isLandType(incomingType)) {
+        updates.configuration = { ...(updates.configuration || {}), bhkOptions: [] };
+      }
+    }
+
+    return await ProjectRepository.update(id, updates);
   }
 
   async deleteProject(id) {

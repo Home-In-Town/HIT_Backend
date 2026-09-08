@@ -341,6 +341,8 @@ class LeadCaptureService {
         locationCanonical: extraction.params.locationCanonical,
         city: extraction.params.city,
         propertyType: extraction.params.propertyType,
+        area: extraction.params.area || null,           // size in sqft (normalized)
+        areaUnit: extraction.params.area ? 'sqft' : null,
         possessionNeeded: extraction.params.possessionNeeded,
         loanRequired: extraction.params.loanRequired || false,
         urgency: extraction.params.urgency || 'normal'

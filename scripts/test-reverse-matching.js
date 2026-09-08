@@ -786,6 +786,65 @@ runCategory('11. Property-Type Awareness', [
 ]);
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// CATEGORY 12: AREA / SIZE SCORING (land / plot / commercial)
+// Coverage for the sqft-normalized area band shared with MatchEngineV2.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// A plot project advertising a 900–5000 sqft size range (Vrindavan-like).
+const SIZED_PLOT_PROJECT = {
+  _id: 'proj_sized_plot',
+  projectName: 'Sized Plots Wardha',
+  projectType: 'plot', propertyType: 'Residential Plot', category: 'Residential',
+  city: 'Nagpur', location: 'Wardha Road', latitude: 21.1100, longitude: 79.1200,
+  reraApproved: false, projectStatus: 'ready-to-move',
+  pricing: { startingPrice: 3000000, bankLoanAvailable: true },
+  configuration: { bhkOptions: [], plotSizeRange: '900-5000' },
+  owner: { _id: 'builder9', verificationStatus: { builder: 'unverified' } }
+};
+
+const plotLeadBase = {
+  bhkType: null, budget: 30, location: 'wardha_road', locationRaw: 'Wardha Road',
+  city: 'Nagpur', propertyType: 'plot', loanRequired: false
+};
+
+runCategory('12. Area / Size Scoring', [
+  {
+    description: 'Area in range (2000 sqft vs 900-5000) → area 14',
+    expected: 'area = 14',
+    validate: () => score({ ...plotLeadBase, area: 2000 }, SIZED_PLOT_PROJECT).breakdown.area === 14
+  },
+  {
+    description: 'Area near below (850 vs min 900, ~5.5%) → area 11',
+    expected: 'area = 11',
+    validate: () => score({ ...plotLeadBase, area: 850 }, SIZED_PLOT_PROJECT).breakdown.area === 11
+  },
+  {
+    description: 'Area loosely off (6000 vs max 5000, 20%) → area 7',
+    expected: 'area = 7',
+    validate: () => score({ ...plotLeadBase, area: 6000 }, SIZED_PLOT_PROJECT).breakdown.area === 7
+  },
+  {
+    description: 'Area way off (20000 vs 900-5000) → no area credit',
+    expected: 'area absent/0',
+    validate: () => !score({ ...plotLeadBase, area: 20000 }, SIZED_PLOT_PROJECT).breakdown.area
+  },
+  {
+    description: 'No area on lead → no area credit',
+    expected: 'area absent/0',
+    validate: () => !score({ ...plotLeadBase }, SIZED_PLOT_PROJECT).breakdown.area
+  },
+  {
+    description: 'In-range area lifts a plot lead above a same-project no-area lead',
+    expected: 'withArea.total > noArea.total',
+    validate: () => {
+      const withArea = score({ ...plotLeadBase, area: 2000 }, SIZED_PLOT_PROJECT);
+      const noArea = score({ ...plotLeadBase }, SIZED_PLOT_PROJECT);
+      return withArea.total > noArea.total;
+    }
+  },
+]);
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // REPORT
 // ═══════════════════════════════════════════════════════════════════════════════
 

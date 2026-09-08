@@ -100,22 +100,31 @@ class ProjectController {
       // Notify OneEmployee (fire-and-forget)
       notifyProjectUpdate(project.owner, project._id, 'updated', project.projectName);
 
-      // Fire-and-forget: if the edited project is (still) published, re-run reverse
-      // matching so detail changes (price, location, type, BHK) surface freshly
-      // matching buyer leads and pull those agents into the project sub-group.
-      // Draft/unpublished edits are skipped — only live inventory should match.
-      if (project.status === 'published') {
+      // Fire-and-forget post-edit side effects. Fetch the full, owner-populated
+      // project once and reuse it for both the pin refresh and reverse matching.
+      {
         const projectId = project.id || project._id;
+        const io = req.app.get('io');
         Project.findById(projectId)
           .populate('owner', 'name companyName role verificationStatus')
           .lean()
-          .then(fullProject => {
+          .then(async (fullProject) => {
             if (!fullProject) return;
-            const io = req.app.get('io');
-            return reverseMatchService.onProjectPublished(fullProject, io);
+
+            // Always refresh the sub-group pinned message so it reflects the
+            // current project (price, type, plot size, BHK) instead of freezing
+            // at sub-group creation.
+            const { refreshProjectSubGroupPin } = require('../services/UniversalGroupService');
+            await refreshProjectSubGroupPin(fullProject, io).catch(() => {});
+
+            // Re-run reverse matching only for live inventory — draft edits
+            // shouldn't surface as matches.
+            if (fullProject.status === 'published') {
+              await reverseMatchService.onProjectPublished(fullProject, io);
+            }
           })
           .catch(err => {
-            console.error('ReverseMatch (update) non-blocking error:', err.message);
+            console.error('Post-update side effects (non-blocking) error:', err.message);
           });
       }
 

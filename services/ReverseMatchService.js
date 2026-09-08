@@ -294,6 +294,17 @@ class ReverseMatchService {
       }
     }
 
+    // === Area / Size Match (14 points) — kept in sync with MatchEngineV2._scoreArea ===
+    // Primary discriminator for land/plot/farm/commercial leads (which have no
+    // BHK). Compares the lead's sqft-normalized area against the project's
+    // plot/carpet size range.
+    const areaPts = this._scoreArea(params, project);
+    if (areaPts > 0) {
+      total += areaPts;
+      breakdown.area = areaPts;
+      matchedOn.push('area');
+    }
+
     // === Loan Match (6 points) ===
     if (params.loanRequired && project.pricing?.bankLoanAvailable) {
       total += 6;
@@ -346,6 +357,29 @@ class ReverseMatchService {
     }
 
     return { total: Math.min(100, total), breakdown, matchedOn };
+  }
+
+  /**
+   * Area/size score (0..14) for a lead's area against a project's size range.
+   * Uses the exact same bands and project-parsing as MatchEngineV2._scoreArea
+   * so forward and reverse agree on size fit.
+   */
+  _scoreArea(params, project) {
+    const reqArea = params.area;
+    if (!reqArea || reqArea <= 0) return 0;
+
+    const MatchEngineV2 = require('./MatchEngineV2');
+    const range = MatchEngineV2.parseProjectArea(project);
+    if (!range) return 0;
+
+    const [min, max] = range;
+    if (reqArea >= min && reqArea <= max) return 14;
+
+    const edge = reqArea < min ? min : max;
+    const diff = Math.abs(reqArea - edge) / edge;
+    if (diff <= 0.10) return 11;
+    if (diff <= 0.25) return 7;
+    return 0;
   }
 
   _scoreLocation(params, project) {
