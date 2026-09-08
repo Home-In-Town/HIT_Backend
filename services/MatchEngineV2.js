@@ -51,8 +51,8 @@ class MatchEngineV2 {
 
       // Fetch candidate projects (wider net than final results)
       const projects = await Project.find(query)
-        .populate('owner', 'name companyName role verificationStatus')
-        .select('projectName projectType category propertyType city location latitude longitude pricing configuration projectStatus owner media slug reraApproved landmarks')
+        .populate('owner', 'name companyName role verificationStatus rating ratingCount')
+        .select('projectName projectType category propertyType city location latitude longitude pricing configuration projectStatus owner media slug reraApproved reraNumber landmarks')
         .limit(80) // Fetch more candidates for better scoring
         .lean();
 

@@ -425,14 +425,34 @@ exports.confirmLead = async (req, res) => {
     }
 
     // 4) Post results message with match cards.
-    const matchCards = matches.map((m) => ({
-      projectId: m.project._id,
-      projectName: m.project.projectName,
-      city: m.project.city,
-      location: m.project.location,
-      score: m.score,
-      slug: m.project.slug
-    }));
+    //    Enriched to render the rich project card (cover image, builder identity,
+    //    verified badge, rating, price/BHK/status/RERA) — same look as the group
+    //    chat project announcement card, plus the match score.
+    const matchCards = matches.map((m) => {
+      const p = m.project;
+      const owner = p.owner || {};
+      const verifiedBuilder = owner.verificationStatus?.builder === 'verified';
+      return {
+        projectId: p._id,
+        projectName: p.projectName,
+        city: p.city,
+        location: p.location,
+        score: m.score,
+        matchedOn: m.matchedOn || [],
+        slug: p.slug,
+        // Rich card fields
+        coverImageUrl: p.media?.coverImage?.url || '',
+        startingPrice: p.pricing?.startingPrice || 0,
+        bhkOptions: p.configuration?.bhkOptions || [],
+        projectStatus: p.projectStatus || '',
+        reraNumber: p.reraNumber || '',
+        bankLoanAvailable: !!p.pricing?.bankLoanAvailable,
+        builderName: owner.name || '',
+        builderCompany: owner.companyName || '',
+        isVerifiedBuilder: !!verifiedBuilder,
+        builderRating: owner.rating || 0
+      };
+    });
     const resultsContent = phrasings.pickResults(matches.length);
     const resultsMsg = await ChatMessage.create({
       session: session._id,
