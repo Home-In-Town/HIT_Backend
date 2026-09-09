@@ -335,6 +335,156 @@ async function refreshProjectSubGroupPin(project, io) {
   }
 }
 
+/**
+ * Build the projectAnnouncement snapshot subdocument from a project.
+ * The project should be populated with `owner` (name, companyName, role,
+ * verificationStatus[, rating, ratingCount]).
+ */
+function _buildAnnouncementSnapshot(project, kind, changedFields = []) {
+  const owner = project.owner || {};
+  const verifiedBuilder =
+    owner.isVerifiedBuilder === true ||
+    owner.verificationStatus?.builder === 'verified';
+
+  return {
+    project: project._id,
+    kind,
+    projectName: project.projectName || '',
+    coverImageUrl: project.media?.coverImage?.url || '',
+    slug: project.slug || '',
+    location: project.location || '',
+    city: project.city || '',
+    startingPrice: project.pricing?.startingPrice || 0,
+    bhkOptions: project.configuration?.bhkOptions || [],
+    projectStatus: project.projectStatus || '',
+    reraNumber: project.reraNumber || '',
+    bankLoanAvailable: !!project.pricing?.bankLoanAvailable,
+    builderName: owner.name || '',
+    builderCompany: owner.companyName || '',
+    isVerifiedBuilder: !!verifiedBuilder,
+    builderRating: owner.rating || 0,
+    changedFields: kind === 'updated' ? changedFields : []
+  };
+}
+
+/**
+ * Detect whether an edit is "significant" enough to announce.
+ * Compares a whitelist of buyer-facing fields between the pre-update snapshot
+ * and the updated project. Returns a human-readable list of what changed.
+ *
+ * @param {object} before - Plain project object BEFORE the update.
+ * @param {object} after  - Plain project object AFTER the update.
+ * @returns {string[]} - Labels of significant changes (empty = not significant).
+ */
+function detectSignificantChanges(before, after) {
+  const changes = [];
+  if (!before || !after) return changes;
+
+  const beforePrice = before.pricing?.startingPrice || 0;
+  const afterPrice = after.pricing?.startingPrice || 0;
+  if (beforePrice !== afterPrice) changes.push('Price updated');
+
+  if ((before.projectStatus || '') !== (after.projectStatus || '')) {
+    changes.push('Status updated');
+  }
+
+  const beforeBhk = (before.configuration?.bhkOptions || []).slice().sort().join(',');
+  const afterBhk = (after.configuration?.bhkOptions || []).slice().sort().join(',');
+  if (beforeBhk !== afterBhk) changes.push('Configuration updated');
+
+  const beforeGallery = before.media?.galleryImages?.length || 0;
+  const afterGallery = after.media?.galleryImages?.length || 0;
+  if (afterGallery > beforeGallery) changes.push('New photos added');
+
+  const beforeCover = before.media?.coverImage?.url || '';
+  const afterCover = after.media?.coverImage?.url || '';
+  if (beforeCover !== afterCover) changes.push('Cover image updated');
+
+  return changes;
+}
+
+/**
+ * Post a persistent project announcement card into the HIT Community room.
+ * Non-blocking / idempotent-ish: safe to call fire-and-forget. Snapshots the
+ * project + builder identity so the card renders stably over time.
+ *
+ * @param {object} project - Project populated with `owner`.
+ * @param {'new'|'updated'} kind
+ * @param {object} [io] - Socket.io instance.
+ * @param {string[]} [changedFields] - Only used for kind === 'updated'.
+ * @returns {Promise<object|null>} The created message, or null if skipped.
+ */
+async function postProjectAnnouncement(project, kind = 'new', io, changedFields = []) {
+  try {
+    if (!project?._id) return null;
+
+    const room = await getUniversalGroup();
+    if (!room) return null; // Community room not ready — skip silently.
+
+    const GroupMessage = require('../models/GroupMessage');
+    const ownerId = project.owner?._id?.toString() || project.owner?.toString();
+
+    // There is at most ONE announcement card per project. If one already exists,
+    // update it in place (flip to "updated", refresh snapshot) instead of posting
+    // a second card. This keeps a single, self-updating card in the conversation.
+    const existing = await GroupMessage.findOne({
+      room: room._id,
+      messageType: 'project_announcement',
+      'projectAnnouncement.project': project._id
+    });
+
+    // If the card already exists, any subsequent announcement is an "update",
+    // regardless of the caller's `kind` (e.g. re-publish after edit).
+    const effectiveKind = existing ? 'updated' : kind;
+    const snapshot = _buildAnnouncementSnapshot(project, effectiveKind, changedFields);
+    const content = effectiveKind === 'new'
+      ? `New project published: ${snapshot.projectName}`
+      : `Project updated: ${snapshot.projectName}`;
+
+    let message;
+    let isUpdate = false;
+
+    if (existing) {
+      isUpdate = true;
+      existing.content = content;
+      existing.projectAnnouncement = snapshot;
+      existing.sender = ownerId || existing.sender;
+      await existing.save();
+      message = existing;
+    } else {
+      message = await GroupMessage.create({
+        room: room._id,
+        sender: ownerId,
+        messageType: 'project_announcement',
+        content,
+        projectAnnouncement: snapshot
+      });
+    }
+
+    // Bump room activity so it surfaces at the top of everyone's list.
+    await GroupRoom.updateOne({ _id: room._id }, { $set: { lastActivity: new Date() } });
+
+    // Broadcast to open clients in the community room.
+    if (io) {
+      const populated = await GroupMessage.findById(message._id)
+        .populate('sender', 'name role companyName')
+        .lean();
+      const payload = { ...populated, roomId: room._id.toString() };
+      // New card → append via the normal message event.
+      // Existing card → dedicated update event so clients replace it in place.
+      io.to(`group_${room._id}`).emit(
+        isUpdate ? 'project_announcement_updated' : 'group_message',
+        payload
+      );
+    }
+
+    return message;
+  } catch (err) {
+    console.error('postProjectAnnouncement error (non-blocking):', err.message);
+    return null;
+  }
+}
+
 module.exports = {
   ensureUniversalGroup,
   getUniversalGroup,
@@ -342,6 +492,8 @@ module.exports = {
   findOrCreateProjectSubGroup,
   refreshProjectSubGroupPin,
   buildProjectInfoMessage,
+  postProjectAnnouncement,
+  detectSignificantChanges,
   clearCache,
   UNIVERSAL_GROUP_NAME
 };

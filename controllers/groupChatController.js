@@ -292,6 +292,12 @@ exports.postMessage = async (req, res) => {
       return res.status(403).json({ error: 'Not a member of this room' });
     }
 
+    // Project sub-groups are scoped to a single project — requirement/inventory
+    // discovery cards don't belong here (they belong in community/area rooms).
+    if (room.roomType === 'project' && (messageType === 'inventory_card' || messageType === 'requirement_card')) {
+      return res.status(400).json({ error: 'Requirement and inventory cards are not allowed in project groups' });
+    }
+
     const msgData = {
       room: roomId,
       sender: userId,
