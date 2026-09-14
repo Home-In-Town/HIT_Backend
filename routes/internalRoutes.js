@@ -390,7 +390,7 @@ router.get('/projects/:hitUserId', async (req, res) => {
         const projects = await Project.find({
             status: { $ne: 'deleted' }
         })
-            .select('projectName slug _id coverImage city location projectType category reraApproved reraNumber projectStatus pricing configuration amenities cta media status owner createdAt updatedAt')
+            .select('projectName slug _id coverImage city location latitude longitude googleMapLink landmarks propertyType projectType category reraApproved reraNumber projectStatus pricing configuration amenities cta media status owner createdAt updatedAt')
             .sort({ createdAt: -1 });
 
         res.status(200).json({
