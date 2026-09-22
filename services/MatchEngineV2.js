@@ -43,42 +43,85 @@ class MatchEngineV2 {
    */
   async findMatches(requirement, options = {}) {
     const startTime = Date.now();
-    const { limit = 10, excludeOwner, minScore = 25 } = options;
+    const {
+      limit = 10,
+      excludeOwner,
+      minScore = 25,
+      // When nothing clears minScore, still return the closest few so the user
+      // always sees *something* relevant instead of an empty result.
+      allowNearest = true,
+      nearestLimit = 3,
+    } = options;
+
+    const SELECT = 'projectName projectType category propertyType city location latitude longitude pricing configuration projectStatus owner media slug reraApproved landmarks';
 
     try {
-      // Build the MongoDB query
-      const query = this._buildQuery(requirement, excludeOwner);
+      // Progressive widening: start strict, then relax one constraint at a time.
+      // A single over-constrained AND query was the reason one differing detail
+      // (BHK / budget / exact locality) produced zero matches.
+      const tiers = this._buildQueryTiers(requirement, excludeOwner);
 
-      // Fetch candidate projects (wider net than final results)
-      const projects = await Project.find(query)
-        .populate('owner', 'name companyName role verificationStatus')
-        .select('projectName projectType category propertyType city location latitude longitude pricing configuration projectStatus owner media slug reraApproved landmarks')
-        .limit(80) // Fetch more candidates for better scoring
-        .lean();
+      const seen = new Set();
+      const candidates = [];
+      let tiersUsed = 0;
 
-      // Score each project
-      const scored = projects.map(project => {
+      for (const query of tiers) {
+        tiersUsed++;
+        const batch = await Project.find(query)
+          .populate('owner', 'name companyName role verificationStatus')
+          .select(SELECT)
+          .limit(80)
+          .lean();
+
+        for (const p of batch) {
+          const id = String(p._id);
+          if (seen.has(id)) continue;
+          seen.add(id);
+          candidates.push(p);
+        }
+
+        // Stop as soon as this tier gives us enough solid matches.
+        const solid = candidates
+          .map((p) => this._calculateScore(requirement, p).score)
+          .filter((sc) => sc >= minScore).length;
+        if (solid >= limit) break;
+        if (candidates.length >= 200) break; // safety cap
+      }
+
+      // Score every candidate we gathered.
+      const scored = candidates.map((project) => {
         const result = this._calculateScore(requirement, project);
         return {
           project,
           score: result.score,
           matchedOn: result.matchedOn,
           confidence: result.confidence,
-          breakdown: result.breakdown
+          breakdown: result.breakdown,
+          matchQuality: this._matchQuality(result.score),
         };
       });
 
-      // Sort by score descending, filter by minimum
       scored.sort((a, b) => b.score - a.score);
-      const topMatches = scored
-        .filter(m => m.score >= minScore)
-        .slice(0, limit);
+
+      let topMatches = scored.filter((m) => m.score >= minScore).slice(0, limit);
+      let usedNearest = false;
+
+      // Nothing cleared the bar → hand back the closest options, clearly flagged.
+      if (topMatches.length === 0 && allowNearest) {
+        topMatches = scored
+          .filter((m) => m.score > 0)
+          .slice(0, nearestLimit)
+          .map((m) => ({ ...m, matchQuality: 'nearest', nearest: true }));
+        usedNearest = topMatches.length > 0;
+      }
 
       const elapsed = Date.now() - startTime;
       logger.info(`MatchV2 completed in ${elapsed}ms`, {
         requirement: this._summarizeRequirement(requirement),
-        candidatesFound: projects.length,
+        tiersUsed,
+        candidatesFound: candidates.length,
         matchesReturned: topMatches.length,
+        nearestFallback: usedNearest,
         topScore: topMatches[0]?.score || 0
       });
 
@@ -89,9 +132,61 @@ class MatchEngineV2 {
     }
   }
 
+  /**
+   * Label a score so the UI can tell the user how good the match really is.
+   */
+  _matchQuality(score) {
+    if (score >= 70) return 'exact';
+    if (score >= 45) return 'close';
+    return 'nearest';
+  }
+
+  /**
+   * Queries ordered strict → loose. Each tier drops/relaxes one constraint so a
+   * single mismatched detail can't wipe out the candidate set.
+   *
+   *   0. Everything (budget ±20%, locality, BHK, loan)   — best case
+   *   1. Budget widened to ±50%, BHK dropped              — "close on money"
+   *   2. Locality dropped, city only                      — Koradi → any Nagpur
+   *   3. Fully open (published only)                       — last resort
+   */
+  _buildQueryTiers(requirement, excludeOwner) {
+    const tiers = [];
+
+    // Tier 0 — strict (original behavior).
+    tiers.push(this._buildQuery(requirement, excludeOwner));
+
+    // Tier 1 — wider budget band, no BHK restriction.
+    tiers.push(this._buildQuery(
+      { ...requirement, bhkType: null },
+      excludeOwner,
+      { budgetTolerance: 0.5 }
+    ));
+
+    // Tier 2 — city only (keeps the search regional but forgets the locality).
+    const cityOnly = { status: 'published' };
+    if (excludeOwner) cityOnly.owner = { $ne: excludeOwner };
+    if (requirement.city) {
+      cityOnly.city = { $regex: this._escapeRegex(requirement.city), $options: 'i' };
+      tiers.push(cityOnly);
+    }
+
+    // Tier 3 — anything published (ranked purely by score).
+    const open = { status: 'published' };
+    if (excludeOwner) open.owner = { $ne: excludeOwner };
+    tiers.push(open);
+
+    return tiers;
+  }
+
+  _escapeRegex(str) {
+    return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
   // ─── Query Builder ──────────────────────────────────────────────────────────
 
-  _buildQuery(requirement, excludeOwner) {
+  _buildQuery(requirement, excludeOwner, opts = {}) {
+    const { budgetTolerance = 0.2 } = opts;
     const query = { status: 'published' };
 
     // Exclude sender's own projects
@@ -99,13 +194,14 @@ class MatchEngineV2 {
       query.owner = { $ne: excludeOwner };
     }
 
-    // Budget: ±20% at DB level (wider than old ±10%, scoring narrows it)
+    // Budget band at DB level; scoring narrows it further. Tolerance is widened
+    // by later tiers so a near-miss budget still surfaces candidates.
     if (requirement.budget && requirement.budget > 0) {
       const budgetInUnits = requirement.budget * 100000; // lakhs → actual
       const maxBudget = requirement.budgetMax
-        ? requirement.budgetMax * 100000 * 1.2
-        : budgetInUnits * 1.2;
-      const minBudget = budgetInUnits * 0.8;
+        ? requirement.budgetMax * 100000 * (1 + budgetTolerance)
+        : budgetInUnits * (1 + budgetTolerance);
+      const minBudget = budgetInUnits * (1 - budgetTolerance);
       query['pricing.startingPrice'] = { $gte: minBudget, $lte: maxBudget };
     }
 
@@ -186,17 +282,21 @@ class MatchEngineV2 {
     const matchedOn = [];
     let totalScore = 0;
 
+    // NOTE on `matchedOn`: only genuine matches are listed. Graded "near"
+    // fallbacks still contribute points (so nearest-match ranking works) but
+    // must not claim the criterion was actually met.
+
     // === Budget Match (28 points max) ===
     const budgetScore = this._scoreBudget(requirement, project);
     breakdown.budget = budgetScore;
     totalScore += budgetScore.score;
-    if (budgetScore.score > 0) matchedOn.push('budget');
+    if (budgetScore.score > 0 && !budgetScore.near) matchedOn.push('budget');
 
     // === Location Match (28 points max) ===
     const locationScore = this._scoreLocation(requirement, project);
     breakdown.location = locationScore;
     totalScore += locationScore.score;
-    if (locationScore.score > 0) matchedOn.push(locationScore.method);
+    if (locationScore.score > 0 && !locationScore.near) matchedOn.push(locationScore.method);
 
     // === Property Type Match (18 points max) ===
     const typeScore = this._scorePropertyType(requirement, project);
@@ -211,7 +311,7 @@ class MatchEngineV2 {
       : this._scoreBhk(requirement, project);
     breakdown.bhk = bhkScore;
     totalScore += bhkScore.score;
-    if (bhkScore.score > 0) matchedOn.push('bhk');
+    if (bhkScore.score > 0 && !bhkScore.near) matchedOn.push('bhk');
 
     // === Loan Match (6 points max) ===
     const loanScore = this._scoreLoan(requirement, project);
@@ -223,7 +323,7 @@ class MatchEngineV2 {
     const possessionScore = this._scorePossession(requirement, project);
     breakdown.possession = possessionScore;
     totalScore += possessionScore.score;
-    if (possessionScore.score > 0) matchedOn.push('possession');
+    if (possessionScore.score > 0 && !possessionScore.near) matchedOn.push('possession');
 
     // === Bonus: Verified Builder (3 points) ===
     if (project.owner?.verificationStatus?.builder === 'verified') {
@@ -262,7 +362,11 @@ class MatchEngineV2 {
     if (diff <= 0.15) return { score: 19, detail: 'within_15%' };
     if (diff <= 0.20) return { score: 13, detail: 'within_20%' };
     if (diff <= 0.30) return { score: 7, detail: 'within_30%' };
-    return { score: 0, detail: `diff_${Math.round(diff * 100)}%` };
+    // Graded tail: a budget that's merely far off should still RANK (nearest
+    // match) rather than score zero and disappear entirely.
+    if (diff <= 0.50) return { score: 5, detail: 'within_50%', near: true };
+    if (diff <= 1.00) return { score: 3, detail: 'within_100%', near: true };
+    return { score: 1, detail: `diff_${Math.round(diff * 100)}%`, near: true };
   }
 
   /**
@@ -320,16 +424,20 @@ class MatchEngineV2 {
       }
     }
 
-    // City-level match as last resort
+    // City-level match as last resort — this is the "Koradi asked, Nagpur stock"
+    // case: the locality differs but it's still the right city.
     if (requirement.city && projectCity) {
       const reqCity = requirement.city.toLowerCase();
       const projCity = projectCity.toLowerCase();
       if (projCity.includes(reqCity) || reqCity.includes(projCity)) {
         return { score: 8, method: 'city_only', confidence: 0.4 };
       }
+      // Different city entirely → tiny score so it can still be offered as a
+      // nearest match, but it can never outrank same-city stock (8 > 2).
+      return { score: 2, method: 'other_city', confidence: 0.15, near: true };
     }
 
-    return { score: 0, method: 'no_match' };
+    return { score: 2, method: 'location_unknown', confidence: 0.1, near: true };
   }
 
   _scoreBhk(requirement, project) {
@@ -348,13 +456,16 @@ class MatchEngineV2 {
       }
     }
 
-    // Adjacent BHK (e.g., looking for 2BHK but project has 2.5BHK or 3BHK)
+    // Graded BHK distance — a 4BHK hunter should still see 3BHK stock ranked
+    // above nothing at all, just below the exact/adjacent options.
+    let bestDelta = Infinity;
     for (const option of project.configuration.bhkOptions) {
       const optNum = parseInt(option);
-      if (!isNaN(optNum) && Math.abs(optNum - bhkNum) === 1) {
-        return { score: 6, detail: 'adjacent_bhk' };
-      }
+      if (!isNaN(optNum)) bestDelta = Math.min(bestDelta, Math.abs(optNum - bhkNum));
     }
+    if (bestDelta === 1) return { score: 6, detail: 'adjacent_bhk' };
+    if (bestDelta === 2) return { score: 3, detail: 'bhk_off_by_2', near: true };
+    if (Number.isFinite(bestDelta)) return { score: 1, detail: `bhk_off_by_${bestDelta}`, near: true };
 
     return { score: 0, detail: 'no_match' };
   }
@@ -374,11 +485,20 @@ class MatchEngineV2 {
       return { score: 2, detail: 'no_data_neutral' }; // Neutral score when no data
     }
 
+    // Two vocabularies reach this function:
+    //   • NLPExtractor (free text) → immediate | 6months | 1year | 2year
+    //   • LeadFlowEngine (AI chat) → ready | under_construction
+    // Both must be understood, otherwise chat-originated leads silently lose
+    // their possession preference.
     const possessionMap = {
+      // free-text vocabulary
       'immediate': ['ready-to-move', 'completed', 'ready', 'possession-ready'],
       '6months': ['under-construction', 'nearing-completion', 'pre-launch', 'ready-to-move'],
       '1year': ['under-construction', 'pre-launch', 'launch', 'nearing-completion'],
-      '2year': ['under-construction', 'pre-launch', 'new-launch']
+      '2year': ['under-construction', 'pre-launch', 'new-launch'],
+      // AI-chat vocabulary
+      'ready': ['ready-to-move', 'completed', 'ready', 'possession-ready'],
+      'under_construction': ['under-construction', 'nearing-completion', 'pre-launch', 'launch', 'new-launch'],
     };
 
     const validStatuses = possessionMap[requirement.possessionNeeded] || [];
@@ -387,7 +507,9 @@ class MatchEngineV2 {
     if (validStatuses.some(s => projectStatus.includes(s))) {
       return { score: 6, detail: 'status_match' };
     }
-    return { score: 0, detail: 'status_mismatch' };
+    // Wrong construction stage is a soft preference, not a disqualifier — keep
+    // partial credit so it ranks below a status match but above nothing.
+    return { score: 2, detail: 'status_mismatch', near: true };
   }
 
   /**

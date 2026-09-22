@@ -80,7 +80,14 @@ const extractedLeadSchema = new mongoose.Schema({
     areaUnit: { type: String, enum: ['sqft', 'acres', null], default: null },
     possessionNeeded: { type: String, default: null },
     loanRequired: { type: Boolean, default: false },
-    urgency: { type: String, enum: ['normal', 'urgent', 'very_urgent'], default: 'normal' },
+    // First three are the legacy NLP-derived values (still produced by
+    // NLPExtractor from free text). The rest come from the AI chat's urgency
+    // question. Both sets are accepted so old and new leads stay valid.
+    urgency: {
+      type: String,
+      enum: ['normal', 'urgent', 'very_urgent', 'immediate', '1_2_months', 'exploring', 'other'],
+      default: 'normal'
+    },
 
     // ─── Sell-listing fields (from AI Lead Matching "sell" flow) ────────────
     // Mirror the project upload form so a seller lead carries listing detail.

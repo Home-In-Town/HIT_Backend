@@ -443,11 +443,12 @@ exports.confirmLead = async (req, res) => {
       readBy: [assistantId]
     });
 
-    // 5) Close the flow gracefully — a warm wrap-up + optional quick actions.
-    //    We do NOT auto-restart the intent question (that felt pushy). The
-    //    conversation enters a terminal 'completed' state with NO pending
-    //    question; the user chooses what to do next via the actions tray.
-    const closingMsg = await postText(session, assistantId, phrasings.pickClosing());
+    // 5) Close the flow with a SINGLE wrap-up + quick actions.
+    //    Previously we posted both a results message and a separate closing
+    //    message, which read as two confirmations for the same lead. The results
+    //    message already confirms the outcome, so the extra closing text is gone.
+    //    We do NOT auto-restart the intent question (that felt pushy) — the
+    //    conversation ends in 'completed' with no pending question.
     const actionsMsg = await ChatMessage.create({
       session: session._id,
       sender: assistantId,
@@ -457,8 +458,8 @@ exports.confirmLead = async (req, res) => {
         inputType: 'actions',
         options: {
           actions: [
-            { action: 'new_lead', label: { en: 'New requirement', hi: 'Nayi requirement' }, icon: 'plus' },
-            { action: 'view_leads', label: { en: 'View my leads', hi: 'Meri leads dekhein' }, icon: 'list' }
+            { action: 'new_lead', label: { en: 'New post', hi: 'New post' }, icon: 'plus' },
+            { action: 'view_leads', label: { en: 'Matching project', hi: 'Matching project' }, icon: 'list' }
           ]
         }
       },
@@ -475,7 +476,8 @@ exports.confirmLead = async (req, res) => {
       leadId: lead._id,
       matchCount: matches.length,
       resultsMessage: resultsMsg,
-      closingMessage: closingMsg,
+      // Kept in the response shape (null) so older clients that read it don't break.
+      closingMessage: null,
       actionsMessage: actionsMsg,
       flowState: session.leadFlowState
     });

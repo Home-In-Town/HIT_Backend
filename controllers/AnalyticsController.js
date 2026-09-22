@@ -20,6 +20,13 @@ class AnalyticsController {
   }
 
   async trackCta(req, res) {
+    // Public tracking endpoint (no auth by design). Missing/!invalid input is a
+    // CLIENT error — it was returning 500, which made real server faults
+    // indistinguishable from malformed beacons in monitoring.
+    const { projectId, ctaType } = req.body || {};
+    if (!projectId || !ctaType) {
+      return res.status(400).json({ message: 'projectId and ctaType are required' });
+    }
     try {
       await AnalyticsService.trackCtaClick(req.body);
       res.json({ success: true });

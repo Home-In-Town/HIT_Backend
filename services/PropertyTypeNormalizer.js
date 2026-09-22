@@ -37,6 +37,8 @@ const FAMILY_CATEGORY = {
   farm_house: 'residential',
   farm_land: 'residential',
   serviced_apartment: 'residential',
+  builder_floor: 'residential',
+  pg_coliving: 'residential',
 
   office: 'commercial',
   retail: 'commercial',
@@ -55,13 +57,14 @@ const FAMILY_CATEGORY = {
 // Related families that are "close enough" for a partial-credit match.
 // Symmetric groups: a requirement for one gives partial credit to the others.
 const RELATED_GROUPS = [
-  ['flat', 'studio', 'penthouse', 'duplex', 'serviced_apartment'], // apartment family
-  ['villa', 'independent_house', 'row_house', 'duplex'],           // low-rise homes
+  ['flat', 'studio', 'penthouse', 'duplex', 'serviced_apartment', 'builder_floor'], // apartment family
+  ['villa', 'independent_house', 'row_house', 'duplex', 'builder_floor'],           // low-rise homes
   ['plot', 'farm_land', 'commercial_plot'],                        // land family
   ['farm_house', 'farm_land'],                                     // farm family
   ['office', 'coworking', 'showroom', 'retail'],                   // workspace/retail
   ['retail', 'showroom'],                                          // storefront
   ['warehouse', 'industry'],                                       // industrial
+  ['pg_coliving', 'flat', 'studio', 'serviced_apartment'],         // shared living
 ];
 
 // Keyword → family. Order matters: more specific phrases first.
@@ -79,10 +82,15 @@ const KEYWORD_RULES = [
   [/residential\s*plot|resi.*plot/, 'plot'],
   [/\bplot\b|\bland\b|\bzameen\b|\bzamin\b|\bjameen\b/, 'plot'],
 
+  // Shared living (before generic dwelling rules — "Co-living Space" must not
+  // fall through to something else)
+  [/\bpg\b|paying\s*guest|co[\s-]*living|\bhostel\b/, 'pg_coliving'],
+
   // Residential dwellings (specific before generic 'apartment/flat')
   [/studio/, 'studio'],
   [/penthouse/, 'penthouse'],
   [/serviced\s*apartment/, 'serviced_apartment'],
+  [/builder\s*floor|builder[\s-]*fl/, 'builder_floor'],
   [/apartment|\bflat\b|\bflats\b/, 'flat'],
   [/duplex/, 'duplex'],
   [/row\s*house|rowhouse/, 'row_house'],

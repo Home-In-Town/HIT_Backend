@@ -2,12 +2,16 @@ const express = require('express');
 const router = express.Router();
 
 const Contact = require('../models/Contact');
+const { protect, restrictTo } = require('../middleware/auth');
 
+// SECURITY: these routes were documented as "Private (Admin)" but had NO auth
+// middleware, so anyone could read every stored contact (names + phone numbers)
+// or insert arbitrary ones. Both are now properly guarded.
 
 // @route   GET /api/contacts
 // @desc    Get recent contacts
 // @access  Private (Admin)
-router.get('/', async (req, res) => {
+router.get('/', protect, restrictTo('admin'), async (req, res) => {
     try {
         const contacts = await Contact.find().sort({ createdAt: -1 }).limit(50);
         res.json(contacts);
@@ -20,7 +24,7 @@ router.get('/', async (req, res) => {
 // @route   POST /api/contacts/single
 // @desc    Add a single contact
 // @access  Private (Admin)
-router.post('/single', async (req, res) => {
+router.post('/single', protect, restrictTo('admin'), async (req, res) => {
     try {
         const { name, phone } = req.body;
 

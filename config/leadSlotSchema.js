@@ -35,23 +35,54 @@ const INTENTS = ['sell', 'buy', 'rent'];
 
 const SKIP_VALUE = '__skipped__';
 
-// ─── Detailed property types per category (mirrors propertyConfig.ts) ────────
+// ─── Detailed property types per category ───────────────────────────────────
+// Categories are the four real-world buckets users think in; each maps to the
+// property types that actually belong to it.
 const CATEGORY_TYPES = {
   Residential: [
-    'Apartment / Flat', 'Villa', 'Independent House', 'Row House', 'Township',
-    'Residential Plot', 'Farm House', 'Farm Land', 'Studio Apartment',
-    'Penthouse', 'Duplex', 'Serviced Apartment', 'Other'
+    'Flats / Apartments',
+    'Independent Houses & Villas',
+    'Builder Floor',
+    'Farmhouses',
+    'Other'
   ],
   Commercial: [
-    'Office Space', 'Retail', 'Showroom', 'Commercial Plot / Land', 'Industry',
-    'Co-working Space', 'Warehouse / Storage', 'Hospitality', 'Other'
+    'Shops & Showrooms',
+    'Office Spaces',
+    'Warehouses & Godowns',
+    'Factories & Industrial Sheds',
+    'Other'
   ],
-  'Mixed Use': [
-    'Residential + Retail', 'Residential + Office', 'Residential + Commercial Complex',
-    'Mixed-Use Tower', 'Mixed-Use Township', 'Residential + Hospitality',
-    'Residential + Commercial Plot', 'Integrated Development', 'Other'
+  'Plots / Land': [
+    'Residential Plots',
+    'Agricultural Land',
+    'Commercial / Industrial Land',
+    'Other'
+  ],
+  'PG / Co-living': [
+    'PG (Paying Guest)',
+    'Co-living Space',
+    'Hostel',
+    'Other'
   ]
 };
+
+// Flat list of every property type — used by the BUY / RENT flow, which asks for
+// the type directly without first asking for a category.
+const ALL_PROPERTY_TYPES = [
+  'Flats / Apartments',
+  'Independent Houses & Villas',
+  'Builder Floor',
+  'Farmhouses',
+  'Shops & Showrooms',
+  'Office Spaces',
+  'Warehouses & Godowns',
+  'Factories & Industrial Sheds',
+  'Residential Plots',
+  'Agricultural Land',
+  'Commercial / Industrial Land',
+  'PG / Co-living Space'
+];
 
 // Build { category: [{value,label}] } for the detailed sell propertyType slot.
 const sellPropertyTypeOptionsByCategory = Object.fromEntries(
@@ -75,10 +106,12 @@ const slots = [
     inputType: 'choice',
     required: true,
     question: { en: 'What would you like to do?', hi: 'Aap kya karna chahte hain?' },
+    // Exactly three choices, kept to single words so the first step is instantly
+    // readable. Values must remain buy/sell/rent — the whole flow branches on them.
     options: [
-      { value: 'sell', label: { en: 'Sell a property', hi: 'Property bechni hai' } },
-      { value: 'buy', label: { en: 'Buy a property', hi: 'Property chahiye' } },
-      { value: 'rent', label: { en: 'Rent (give / take)', hi: 'Rent pe dena / lena' } }
+      { value: 'buy', label: { en: 'Buy', hi: 'Buy' } },
+      { value: 'sell', label: { en: 'Sell', hi: 'Sell' } },
+      { value: 'rent', label: { en: 'Rent', hi: 'Rent' } }
     ]
   },
 
@@ -94,10 +127,12 @@ const slots = [
       en: 'What category is your property?',
       hi: 'Aapki property kis category ki hai?'
     },
+    allowCustom: true, // the client offers an "Other" chip on every choice slot
     options: [
       { value: 'Residential', label: { en: 'Residential', hi: 'Residential' } },
       { value: 'Commercial', label: { en: 'Commercial', hi: 'Commercial' } },
-      { value: 'Mixed Use', label: { en: 'Mixed Use', hi: 'Mixed Use' } }
+      { value: 'Plots / Land', label: { en: 'Plots / Land', hi: 'Plots / Land' } },
+      { value: 'PG / Co-living', label: { en: 'PG & Co-living Space', hi: 'PG & Co-living Space' } }
     ]
   },
 
@@ -127,13 +162,7 @@ const slots = [
       buy: { en: 'What type of property are you looking for?', hi: 'Aap kis type ki property dhoond rahe hain?' },
       rent: { en: 'What type of property is it (for rent)?', hi: 'Rent ke liye kis type ki property hai?' }
     },
-    options: [
-      { value: 'flat', label: { en: 'Flat / Apartment', hi: 'Flat / Apartment' } },
-      { value: 'plot', label: { en: 'Plot / Land', hi: 'Plot / Zameen' } },
-      { value: 'villa', label: { en: 'Villa / House', hi: 'Villa / Ghar' } },
-      { value: 'shop', label: { en: 'Shop', hi: 'Shop / Dukaan' } },
-      { value: 'office', label: { en: 'Office', hi: 'Office' } }
-    ]
+    options: ALL_PROPERTY_TYPES.map((t) => ({ value: t, label: { en: t, hi: t } }))
   },
 
   // ─── 3. BHK ───────────────────────────────────────────────────────────────
@@ -142,9 +171,11 @@ const slots = [
     id: 'bhk',
     inputType: 'choice',
     required: true,
+    // Only built residential units have a BHK count. Plots/land, commercial and
+    // PG/co-living skip this question entirely.
     branchIf: {
-      propertyType: ['flat', 'villa'],
-      propertyTypeDetailed: ['Apartment / Flat', 'Villa', 'Independent House', 'Row House', 'Studio Apartment', 'Penthouse', 'Duplex', 'Serviced Apartment']
+      propertyType: ['Flats / Apartments', 'Independent Houses & Villas', 'Builder Floor', 'Farmhouses'],
+      propertyTypeDetailed: ['Flats / Apartments', 'Independent Houses & Villas', 'Builder Floor', 'Farmhouses']
     },
     branchMatch: 'any', // matches if EITHER propertyType or propertyTypeDetailed qualifies
     allowCustom: true, // e.g. 1RK, studio, 2.5BHK, 5BHK — presets aren't exhaustive
@@ -224,7 +255,13 @@ const slots = [
     required: false,
     skippable: true,
     appliesToIntent: ['buy', 'rent'],
-    branchIf: { propertyType: ['flat', 'villa', 'shop', 'office'] },
+    // Possession stage only makes sense for built property, not raw land.
+    branchIf: {
+      propertyType: [
+        'Flats / Apartments', 'Independent Houses & Villas', 'Builder Floor', 'Farmhouses',
+        'Shops & Showrooms', 'Office Spaces', 'Warehouses & Godowns', 'Factories & Industrial Sheds'
+      ]
+    },
     question: { en: 'Ready to move or under construction?', hi: 'Ready hai ya under-construction?' },
     questionByIntent: {
       buy: { en: 'Do you want ready to move or under construction?', hi: 'Ready chahiye ya under-construction chalega?' },
@@ -305,16 +342,18 @@ const slots = [
     inputType: 'choice',
     required: false,
     skippable: true,
-    question: { en: 'How urgent is it?', hi: 'Kitni jaldi hai?' },
+    allowCustom: true,
+    question: { en: 'How soon?', hi: 'Kitni jaldi hai?' },
     questionByIntent: {
       sell: { en: 'How soon do you want to sell?', hi: 'Kitni jaldi bechna hai?' },
       buy: { en: 'How soon do you want to buy?', hi: 'Kitni jaldi kharidna hai?' },
-      rent: { en: 'How urgent is it?', hi: 'Kitni jaldi hai?' }
+      rent: { en: 'How soon?', hi: 'Kitni jaldi hai?' }
     },
     options: [
-      { value: 'normal', label: { en: 'Normal', hi: 'Normal' } },
-      { value: 'urgent', label: { en: 'Urgent', hi: 'Urgent' } },
-      { value: 'very_urgent', label: { en: 'Very urgent', hi: 'Bahut urgent' } }
+      { value: 'immediate', label: { en: 'Immediate', hi: 'Immediate' } },
+      { value: '1_2_months', label: { en: '1-2 months', hi: '1-2 month' } },
+      { value: 'exploring', label: { en: 'Just exploring', hi: 'Exploring' } },
+      { value: 'other', label: { en: 'Other', hi: 'Other' } }
     ]
   },
 

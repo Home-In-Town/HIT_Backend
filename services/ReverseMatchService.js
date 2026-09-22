@@ -249,11 +249,15 @@ class ReverseMatchService {
 
     // === Possession Match (7 points) ===
     if (params.possessionNeeded && project.projectStatus) {
+      // Must accept BOTH vocabularies — free-text NLP and the AI chat.
+      // See MatchEngineV2._scorePossession for the same mapping.
       const possessionMap = {
         'immediate': ['ready-to-move', 'completed', 'ready', 'possession-ready'],
         '6months': ['under-construction', 'nearing-completion', 'ready-to-move'],
         '1year': ['under-construction', 'pre-launch', 'nearing-completion'],
-        '2year': ['under-construction', 'pre-launch', 'new-launch']
+        '2year': ['under-construction', 'pre-launch', 'new-launch'],
+        'ready': ['ready-to-move', 'completed', 'ready', 'possession-ready'],
+        'under_construction': ['under-construction', 'nearing-completion', 'pre-launch', 'launch', 'new-launch'],
       };
       const validStatuses = possessionMap[params.possessionNeeded] || [];
       const projectStatus = project.projectStatus.toLowerCase().replace(/\s+/g, '-');
@@ -279,13 +283,21 @@ class ReverseMatchService {
       matchedOn.push('rera');
     }
 
-    // === PENALTY: No location match when lead has a location ===
-    // If the lead specifies a location but it doesn't match the project at all,
-    // apply a penalty to prevent cross-city/cross-area false positives
+    // === Soft penalty: lead named a location that doesn't match ===
+    // Still penalised (prevents cross-city false positives in notifications),
+    // but reduced when the CITY matches — "different locality, same city" is a
+    // legitimate nearest match, not a wrong result.
     if ((params.location || params.locationRaw) && !matchedOn.includes('location')) {
-      const penalty = 20;
+      const sameCity = !!(params.city && project.city &&
+        String(project.city).toLowerCase().includes(String(params.city).toLowerCase()));
+      const penalty = sameCity ? 8 : 20;
       total = Math.max(0, total - penalty);
       breakdown.locationPenalty = -penalty;
+      if (sameCity) {
+        total += 10; // city-level credit so same-city stock can still qualify
+        breakdown.cityLevel = 10;
+        matchedOn.push('city');
+      }
     }
 
     return { total: Math.min(100, total), breakdown, matchedOn };

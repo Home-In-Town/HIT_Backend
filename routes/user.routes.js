@@ -55,9 +55,14 @@ router.get("/", protect, restrictTo('admin'), async (req, res) => {
 
 /**
  * GET /api/users/by-role/:role
- * Public: Get list of users by role (for login dropdown - DEPRECATED in new auth but kept for compat)
+ * Admin only. Legacy endpoint from the old login-dropdown flow.
+ *
+ * SECURITY: this was PUBLIC and returned name + email + phone for every admin /
+ * builder / agent. Since phone is the login identifier, it handed out a
+ * ready-made target list for OTP/MPIN attacks. It has no remaining call sites,
+ * so it is now locked to admins (kept rather than deleted for compatibility).
  */
-router.get("/by-role/:role", async (req, res) => {
+router.get("/by-role/:role", protect, restrictTo('admin'), async (req, res) => {
     try {
         const { role } = req.params;
 
