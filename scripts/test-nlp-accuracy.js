@@ -318,9 +318,9 @@ runCategory('6. Budget Extraction', [
   },
   {
     input: 'need 2bhk around 60 lakh manish nagar',
-    description: 'around 60L (±10%)',
-    expected: 'min:54, max:66, flexible',
-    validate: (r) => r?.params?.budget === 54 && r?.params?.budgetMax === 66 && r?.params?.budgetFlexible === true
+    description: 'around 60L (anchor 60, +10% widening)',
+    expected: 'budget:60, max:66, flexible',
+    validate: (r) => r?.params?.budget === 60 && r?.params?.budgetMax === 66 && r?.params?.budgetFlexible === true
   },
   {
     input: 'need 2bhk upto 70 lakh manish nagar',
@@ -333,6 +333,49 @@ runCategory('6. Budget Extraction', [
     description: '60L negotiable (flexible flag)',
     expected: 'flexible:true',
     validate: (r) => r?.params?.budget === 60 && r?.params?.budgetFlexible === true
+  },
+]);
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CATEGORY 6b: AREA / SIZE EXTRACTION (normalized to sqft)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+runCategory('6b. Area / Size Extraction', [
+  {
+    input: 'I need a 5 acre farm near Koradi',
+    description: '5 acre → 217800 sqft',
+    expected: 'area=217800',
+    validate: (r) => r?.params?.area === 217800 && r?.params?.areaUnit === 'sqft'
+  },
+  {
+    input: 'looking for 1200 sqft plot in besa',
+    description: '1200 sqft',
+    expected: 'area=1200',
+    validate: (r) => r?.params?.area === 1200
+  },
+  {
+    input: 'need 3 guntha plot on wardha road',
+    description: '3 guntha → 3267 sqft',
+    expected: 'area=3267',
+    validate: (r) => r?.params?.area === 3267
+  },
+  {
+    input: 'looking for a 200 sq yard plot in manish nagar',
+    description: '200 sq yard → 1800 sqft',
+    expected: 'area=1800',
+    validate: (r) => r?.params?.area === 1800
+  },
+  {
+    input: 'client wants 2.5 acres farm land near koradi',
+    description: '2.5 acres → 108900 sqft (decimal)',
+    expected: 'area=108900',
+    validate: (r) => r?.params?.area === 108900
+  },
+  {
+    input: 'need 2bhk flat in besa 55 lakh',
+    description: 'No area mentioned → area null',
+    expected: 'area=null',
+    validate: (r) => (r?.params?.area === null || r?.params?.area === undefined)
   },
 ]);
 

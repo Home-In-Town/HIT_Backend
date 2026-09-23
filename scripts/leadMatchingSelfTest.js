@@ -99,10 +99,14 @@ check('sell → category next', sellNext.id === 'category', sellNext.id);
 // ── New category set ──
 const catSlot = flow.getSlot('category');
 const catValues = catSlot.options.map((o) => o.value);
-check('4 categories offered', catValues.length === 4, catValues.join(','));
-check('categories are Residential/Commercial/Plots/PG',
-  ['Residential', 'Commercial', 'Plots / Land', 'PG / Co-living'].every((v) => catValues.includes(v)),
+// The category list was widened from 4 to 6 real buckets (+ an "Other" chip) so
+// sellers of farm land / industrial units aren't forced into a wrong bucket.
+check('6 categories + Other offered', catValues.length === 7, catValues.join(','));
+check('categories cover resi/comm/plot/agri/industrial/pg',
+  ['Residential', 'Commercial', 'Plots / Land', 'Agricultural / Farm Land', 'Industrial', 'PG / Co-living']
+    .every((v) => catValues.includes(v)),
   catValues.join(','));
+check('category offers an Other option', catValues.includes('other'), catValues.join(','));
 
 // Detailed sell types follow the chosen category
 const ptd = flow.getSlot('propertyTypeDetailed');
@@ -110,22 +114,38 @@ const resTypes = flow.resolveOptions(ptd, { category: 'Residential' }).map((o) =
 check('Residential detailed types include Flats / Apartments',
   resTypes.includes('Flats / Apartments'), resTypes.join(','));
 const landTypes = flow.resolveOptions(ptd, { category: 'Plots / Land' }).map((o) => o.value);
-check('Plots / Land detailed types include Agricultural Land',
-  landTypes.includes('Agricultural Land'), landTypes.join(','));
+check('Plots / Land detailed types include Residential Plot',
+  landTypes.includes('Residential Plot'), landTypes.join(','));
+// Agricultural land now has its own category instead of being buried under Plots.
+const agriTypes = flow.resolveOptions(ptd, { category: 'Agricultural / Farm Land' }).map((o) => o.value);
+check('Agricultural category includes Agricultural Land',
+  agriTypes.includes('Agricultural Land'), agriTypes.join(','));
+// An "Other"/custom category must still yield a usable picklist, not an empty one.
+const fallbackTypes = flow.resolveOptions(ptd, { category: 'other' }).map((o) => o.value);
+check('Other category falls back to the full type list',
+  fallbackTypes.length > 10, String(fallbackTypes.length));
 
 // ── New urgency set ──
 const urg = flow.getSlot('urgency');
 const urgValues = urg.options.map((o) => o.value);
-check('urgency options are immediate/1_2_months/exploring/other',
-  ['immediate', '1_2_months', 'exploring', 'other'].every((v) => urgValues.includes(v)),
+check('urgency options are immediate/1_2_months/exploring',
+  ['immediate', '1_2_months', 'exploring'].every((v) => urgValues.includes(v)),
   urgValues.join(','));
+// 'other' was REMOVED from urgency on purpose: params.urgency is a hard enum on
+// ExtractedLead, so a free-text urgency threw on save and aborted the whole lead.
+// Skip covers "none of these" instead.
+check('urgency does NOT offer Other (enum-safe)',
+  !urgValues.includes('other'), urgValues.join(','));
+check('urgency is skippable', urg.skippable === true);
 check('urgency accepts immediate', flow.parseAndValidate(urg, 'immediate', {}).valid === true);
 
 // Buy property type list must carry the full catalogue
 const ptBuy = flow.getSlot('propertyType').options.map((o) => o.value);
 check('buy property types include all families',
-  ['Flats / Apartments', 'Shops & Showrooms', 'Warehouses & Godowns', 'Residential Plots'].every((v) => ptBuy.includes(v)),
+  ['Flats / Apartments', 'Shops & Showrooms', 'Warehouses & Godowns', 'Residential Plot',
+   'Agricultural Land', 'Industrial Shed', 'PG (Paying Guest)'].every((v) => ptBuy.includes(v)),
   String(ptBuy.length));
+check('buy property type catalogue is substantially wider', ptBuy.length >= 30, String(ptBuy.length));
 
 // Validation
 const bhkSlot = flow.getSlot('bhk');
@@ -349,6 +369,105 @@ check('"Agricultural Land" is land', propertyTypeNormalizer.isLandType('Agricult
 check('"Commercial / Industrial Land" is land',
   propertyTypeNormalizer.isLandType('Commercial / Industrial Land') === true);
 check('"Office Spaces" is not land', propertyTypeNormalizer.isLandType('Office Spaces') === false);
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 4. FuzzyText — typo / spacing tolerance
+//
+// Real listings are typed by hand on phones. One misspelled field used to mean
+// zero matches, so these are the cases that must survive, plus the
+// false-positive guards that stop "nearest match" becoming "any match".
+// ═══════════════════════════════════════════════════════════════════════════
+const fuzzy = require('../services/FuzzyText');
+
+const near = (a, b, min, label) =>
+  check(label || `fuzzy: "${a}" ~ "${b}"`, fuzzy.compare(a, b).score >= min,
+    `${fuzzy.compare(a, b).score.toFixed(2)} ${fuzzy.compare(a, b).method}`);
+const notNear = (a, b, max, label) =>
+  check(label || `fuzzy: "${a}" !~ "${b}"`, fuzzy.compare(a, b).score <= max,
+    `${fuzzy.compare(a, b).score.toFixed(2)} ${fuzzy.compare(a, b).method}`);
+
+// Spacing differences must be free.
+near('civillines', 'Civil Lines', 0.95);
+near('NewManishNagar', 'New Manish Nagar', 0.95);
+near('Manish  Nagar ', 'manish nagar', 0.95);
+// Abbreviations expand before distance is measured.
+near('Manish Ngr', 'Manish Nagar', 0.85);
+near('Pratap Colny', 'Pratap Colony', 0.85);
+// Noise words are ignored.
+near('near Manish Nagar road', 'Manish Nagar', 0.85);
+near('Manish Nagar Extension', 'manish nagar', 0.8);
+// Genuine typos.
+near('Manesh Nagar', 'Manish Nagar', 0.7);
+near('Cival Lines', 'Civil Lines', 0.7);
+// Word order.
+near('Nagar Manish', 'Manish Nagar', 0.85);
+// Guards: short words one letter apart are DIFFERENT places, not typos.
+notNear('Besa', 'Bela', 0.5);
+notNear('Koradi', 'Wardha', 0.3);
+notNear('Civil Lines', 'Dhantoli', 0.3);
+notNear('Pune', 'Pimpri', 0.5);
+
+// City canonicalisation.
+const cityNear = (a, b) =>
+  check(`city: "${a}" ~ "${b}"`, fuzzy.compareCity(a, b).score >= 1,
+    `${fuzzy.compareCity(a, b).score.toFixed(2)} ${fuzzy.compareCity(a, b).method}`);
+cityNear('Ngpur', 'Nagpur');
+cityNear('nagpr', 'NAGPUR');
+cityNear('Nagpour', 'Nagpur');
+cityNear('Poona', 'Pune');
+cityNear('Bombay', 'Mumbai');
+cityNear('Nasik', 'Nashik');
+check('different cities stay different',
+  fuzzy.compareCity('Nagpur', 'Pune').score < 0.5,
+  String(fuzzy.compareCity('Nagpur', 'Pune').score));
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 5. Every schema option value must normalise to a known type family
+//
+// A property type the normaliser can't place scores 0 on type matching, which
+// silently degrades every match involving it.
+// ═══════════════════════════════════════════════════════════════════════════
+const schema = require('../config/leadSlotSchema');
+for (const [cat, list] of Object.entries(schema.CATEGORY_TYPES)) {
+  const unresolved = list.filter((t) => {
+    const r = propertyTypeNormalizer.normalize(t);
+    return !r.family && !r.category;
+  });
+  check(`all "${cat}" types normalise`, unresolved.length === 0, unresolved.join(','));
+}
+const unresolvedAll = schema.ALL_PROPERTY_TYPES.filter((t) => {
+  const r = propertyTypeNormalizer.normalize(t);
+  return !r.family && !r.category;
+});
+check('all buy/rent types normalise', unresolvedAll.length === 0, unresolvedAll.join(','));
+check('"other" resolves to the other family',
+  propertyTypeNormalizer.normalize('other').family === 'other');
+
+// Spot-check the newly added families.
+[['Commercial Complex', 'retail'], ['Restaurants & Cafes', 'hospitality'],
+ ['Schools & Institutes', 'institutional'], ['Hospitals & Clinics', 'healthcare'],
+ ['Orchard / Plantation', 'farm_land'], ['Single Room', 'pg_coliving'],
+ ['Industrial Shed', 'industry'], ['Service Apartment', 'serviced_apartment'],
+ ['Corner Plot', 'plot'], ['Studio Apartment / 1RK', 'studio'],
+].forEach(([raw, want]) => {
+  const got = propertyTypeNormalizer.normalize(raw).family;
+  check(`"${raw}" → ${want}`, got === want, String(got));
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 6. Lead retention must outlive the matching lookback
+//
+// Leads used to be hard-deleted after 15 days while ReverseMatchService looked
+// back 180 — so the lookback found almost nothing and buy leads were unusable.
+// ═══════════════════════════════════════════════════════════════════════════
+const ExtractedLeadModel = require('../models/ExtractedLead');
+check('lead retention is at least 180 days',
+  ExtractedLeadModel.LEAD_RETENTION_DAYS >= 180,
+  String(ExtractedLeadModel.LEAD_RETENTION_DAYS));
+const freshLead = new ExtractedLeadModel({ extractedBy: new (require('mongoose').Types.ObjectId)() });
+const daysUntilExpiry = (freshLead.expiresAt - Date.now()) / (24 * 3600 * 1000);
+check('a new lead does not expire within 180 days',
+  daysUntilExpiry >= 180, `${Math.round(daysUntilExpiry)} days`);
 
 // ─────────────────────────────────────────────────────────────
 console.log(`\n────────────────────────────────`);

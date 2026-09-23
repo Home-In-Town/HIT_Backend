@@ -53,8 +53,14 @@ class LeadFlowEngine {
         const depVal = filledSlots[depId];
         if (depVal != null && map[depVal]) return map[depVal];
       }
+      // The dependency was answered with "Other" or a custom string, so there is
+      // no per-answer list. Fall back to the full list rather than returning []
+      // and rendering an empty picklist (which left the user with nothing to tap).
+      if (Array.isArray(slot.optionsFallback) && slot.optionsFallback.length) {
+        return slot.optionsFallback;
+      }
     }
-    return slot.options || [];
+    return slot.options || slot.optionsFallback || [];
   }
 
   /**
@@ -257,13 +263,61 @@ class LeadFlowEngine {
 
     switch (slot.inputType) {
       case 'choice': {
-        const allowed = this.resolveOptions(slot, filledSlots).map((o) => o.value);
+        const opts = this.resolveOptions(slot, filledSlots);
+        const allowed = opts.map((o) => o.value);
+        const OTHER = this.schema.OTHER_VALUE;
+
+        // ── Shape A: { value, otherText } ──
+        // The "Other" chip plus the user's own words. We keep the canonical enum
+        // value AND the text (the caller stores the text in flow.otherTexts), so
+        // matching still works while the exact wording survives.
+        if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+          const base = raw.value !== undefined ? String(raw.value) : '';
+          const otherText = this._sanitizeCustom(raw.otherText);
+
+          if (allowed.includes(base)) {
+            if (base === OTHER && !otherText) {
+              return { valid: false, hint: 'Please type what it is.' };
+            }
+            return { valid: true, value: base, otherText: otherText || null };
+          }
+          if (slot.allowCustom && otherText) return { valid: true, value: otherText, custom: true };
+          if (slot.allowCustom && base) {
+            const c = this._sanitizeCustom(base);
+            if (c) return { valid: true, value: c, custom: true };
+          }
+          return { valid: false, hint: 'Please choose one of the given options.' };
+        }
+
+        // ── Shape B: a plain value ──
         if (allowed.includes(raw)) return { valid: true, value: raw };
-        // allowCustom: accept a typed value not in the preset options.
+
+        // Typed text that actually names one of the options ("Ready to move" →
+        // 'ready-to-move'). Matched against value and both labels.
+        const typed = String(raw ?? '').trim().toLowerCase();
+        if (typed) {
+          const hit = opts.find((o) =>
+            String(o.value).toLowerCase() === typed ||
+            String(o.label?.en || '').toLowerCase() === typed ||
+            String(o.label?.hi || '').toLowerCase() === typed
+          );
+          if (hit) return { valid: true, value: hit.value };
+        }
+
+        // allowCustom: the typed value becomes the answer verbatim.
         if (slot.allowCustom) {
           const custom = this._sanitizeCustom(raw);
           if (custom) return { valid: true, value: custom, custom: true };
         }
+
+        // allowOther: fold a typed answer onto the canonical "other" value and
+        // keep the text. Without this, slots with a fixed enum rejected every
+        // typed answer and re-asked the same question forever.
+        if (slot.allowOther) {
+          const text = this._sanitizeCustom(raw);
+          if (text) return { valid: true, value: OTHER, otherText: text };
+        }
+
         return {
           valid: false,
           hint: 'Please choose one of the given options.'
@@ -380,15 +434,37 @@ class LeadFlowEngine {
    * `slots.area` / `slots.expectedPrice` may be { amount, unit } (from a
    * unit-toggle number input) or a plain number.
    */
-  buildLeadParams(intent, filledSlots = {}) {
+  buildLeadParams(intent, filledSlots = {}, otherTexts = {}) {
     const direction = intent; // 'sell' | 'buy' | 'rent'
     const transactionType = intent === 'rent' ? 'rent' : 'buy'; // preserve existing enum
+    const OTHER = this.schema.OTHER_VALUE;
+    const texts = otherTexts || {};
 
     // Treat skipped sentinel as "not provided" (null).
     const val = (id) => {
       const v = filledSlots[id];
       return this.isSkipped(v) ? null : (v ?? null);
     };
+
+    // For descriptive slots (category / property type), an "Other" answer is far
+    // more useful stored as the user's actual words — that string is what
+    // matching and the UI read. The canonical 'other' marker plus the text is
+    // still recorded in params.otherDetails below, so nothing is lost.
+    const valOrOtherText = (id) => {
+      const v = val(id);
+      if (v == null) return null;
+      if (v === OTHER) return texts[id] ? String(texts[id]) : OTHER;
+      return v;
+    };
+
+    // Everything the user typed next to an "Other" choice, keyed by slot.
+    const otherDetails = {};
+    for (const [slotId, text] of Object.entries(texts)) {
+      if (!text) continue;
+      const v = filledSlots[slotId];
+      if (v === undefined || this.isSkipped(v)) continue;
+      otherDetails[slotId] = String(text);
+    }
 
     const area = this._numberAndUnit(val('area'));
     const price = this._numberAndUnit(val('expectedPrice'));
@@ -402,12 +478,19 @@ class LeadFlowEngine {
     if (area.unit === 'sqft' || area.unit === 'acres') areaUnit = area.unit;
 
     // Property type: SELL uses the detailed label; BUY/RENT use the simple value.
-    const propertyType = val('propertyTypeDetailed') || val('propertyType') || null;
+    const propertyType = valOrOtherText('propertyTypeDetailed') || valOrOtherText('propertyType') || null;
 
     // Map sell possession/status → possessionNeeded for matching consistency.
+    // A resale unit is ready to move. 'other' carries no possession meaning, so
+    // it falls through to whatever the status implies.
     const status = val('projectStatus');
-    const possessionNeeded = val('possession') ||
-      (status === 'ready-to-move' ? 'ready' : status === 'under-construction' ? 'under_construction' : null);
+    const possessionFromStatus =
+      (status === 'ready-to-move' || status === 'resale') ? 'ready'
+        : status === 'under-construction' ? 'under_construction'
+          : null;
+    const rawPossession = val('possession');
+    const possessionNeeded =
+      (rawPossession && rawPossession !== OTHER) ? rawPossession : possessionFromStatus;
 
     const amenities = (() => {
       const a = filledSlots.amenities;
@@ -443,7 +526,7 @@ class LeadFlowEngine {
       longitude: geo?.longitude ?? null,
       state: locPlace?.state || cityPlace?.state || null,
       postalCode: locPlace?.postalCode || cityPlace?.postalCode || null,
-      category: val('category'),               // sell only
+      category: valOrOtherText('category'),    // sell only
       propertyType,
       transactionType,
       area: area.amount != null ? area.amount : null,
@@ -455,7 +538,11 @@ class LeadFlowEngine {
       loanRequired: false,
       bankLoanAvailable: val('bankLoanAvailable') === 'yes' ? true : (val('bankLoanAvailable') === 'no' ? false : null),
       amenities,                                // sell only
-      urgency: val('urgency') || 'normal'
+      urgency: val('urgency') || 'normal',
+      // Verbatim text the user typed alongside any "Other" choice, keyed by slot
+      // id (e.g. { projectStatus: 'Nearly finished, 2 months left' }). Omitted
+      // entirely when nothing was typed, so existing leads stay unchanged.
+      otherDetails: Object.keys(otherDetails).length ? otherDetails : undefined
     };
 
     return { direction, transactionType, params };
@@ -465,7 +552,7 @@ class LeadFlowEngine {
    * Human-readable recap for the Summary Card and the ExtractedLead.originalText.
    * Returns { text, values } where values is an ordered list for the UI.
    */
-  buildSummary(intent, filledSlots = {}) {
+  buildSummary(intent, filledSlots = {}, otherTexts = {}) {
     const values = [];
     const applicable = this.applicableSlots(intent, filledSlots);
     for (const slot of applicable) {
@@ -475,7 +562,9 @@ class LeadFlowEngine {
       values.push({
         slotId: slot.id,
         label: slot.question.en,
-        display: skipped ? 'Skipped' : this._displayValue(slot, raw, filledSlots),
+        display: skipped
+          ? 'Skipped'
+          : this._displayValue(slot, raw, filledSlots, (otherTexts || {})[slot.id]),
         skipped
       });
     }
@@ -509,9 +598,11 @@ class LeadFlowEngine {
     return { amount: null, unit: null };
   }
 
-  _displayValue(slot, raw, filledSlots = {}) {
+  _displayValue(slot, raw, filledSlots = {}, otherText = null) {
     if (this.isSkipped(raw)) return 'Skipped';
     if (slot.inputType === 'choice') {
+      // An "Other" answer reads as the user's own words, not the word "Other".
+      if (raw === this.schema.OTHER_VALUE && otherText) return String(otherText);
       const opt = this.resolveOptions(slot, filledSlots).find((o) => o.value === raw);
       return opt ? opt.label.en : String(raw);
     }

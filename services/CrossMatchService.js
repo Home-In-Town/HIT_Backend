@@ -20,12 +20,17 @@ const ExtractedLead = require('../models/ExtractedLead');
 const Notification = require('../models/Notification');
 const User = require('../models/User');
 const locationNormalizer = require('./LocationNormalizer');
+const propertyTypeNormalizer = require('./PropertyTypeNormalizer');
+const fuzzyText = require('./FuzzyText');
 const Logger = require('../utils/logger');
 
 const logger = new Logger('CrossMatch');
 
-// How far back to look for matching leads
-const LOOKBACK_DAYS = 15;
+// How far back to look for matching leads. Was 15 days, which matched the old
+// (now removed) 15-day lead TTL. Leads are retained for years now, and a seller
+// posting today should still reach a buyer who registered interest months ago,
+// so this is aligned with ReverseMatchService's 180-day window.
+const LOOKBACK_DAYS = 180;
 const MAX_RESULTS = 5;
 const MIN_SCORE = 30;
 
@@ -162,22 +167,31 @@ class CrossMatchService {
 
       // Check overlap: does inventory price fall within requirement's range?
       const inRange = invBudget <= reqMax * 1.2 && invBudget >= reqBudget * 0.8;
+      const diff = Math.abs(reqBudget - invBudget) / reqBudget;
       if (inRange) {
-        const diff = Math.abs(reqBudget - invBudget) / reqBudget;
         if (diff <= 0.05) total += 30;
         else if (diff <= 0.10) total += 26;
         else if (diff <= 0.15) total += 20;
         else if (diff <= 0.20) total += 14;
         else total += 8;
         matchedOn.push('budget');
+      } else if (diff <= 0.5) {
+        // Outside the band used to score a flat 0, which is why a budget that was
+        // merely "a bit off" removed the property from consideration. Graded
+        // nearest-match instead — not listed in matchedOn, since it isn't a match.
+        total += diff <= 0.35 ? 6 : 3;
       }
     }
 
     // === Location (30 pts) ===
-    if ((reqParams.location || reqParams.locationRaw) && (invParams.location || invParams.locationRaw)) {
-      const reqLoc = reqParams.locationRaw || reqParams.location;
-      const invLoc = invParams.locationRaw || invParams.location;
+    // Graded, and typo/spacing tolerant. Previously this scored 0 unless
+    // LocationNormalizer recognised BOTH localities, and there was no city-level
+    // fallback at all — so "Manish Ngr" vs "Manish Nagar", or any locality not in
+    // the alias map, silently contributed nothing.
+    const reqLoc = reqParams.locationRaw || reqParams.location;
+    const invLoc = invParams.locationRaw || invParams.location;
 
+    if (reqLoc && invLoc) {
       const match = locationNormalizer.isSameArea(reqLoc, invLoc);
       if (match.matches) {
         switch (match.method) {
@@ -188,27 +202,68 @@ class CrossMatchService {
           default: total += 10;
         }
         matchedOn.push('location');
+      } else {
+        const fz = fuzzyText.compare(reqLoc, invLoc);
+        if (fz.score >= 0.95) { total += 28; matchedOn.push('location'); }
+        else if (fz.score >= 0.85) { total += 22; matchedOn.push('location_fuzzy'); }
+        else if (fz.score >= 0.7) { total += 14; matchedOn.push('location_near'); }
       }
+    }
+
+    // Same-city fallback when the locality didn't land — the right city is still
+    // a meaningful signal, and it must never outrank a real locality match.
+    if (!matchedOn.some(m => m.startsWith('location')) && reqParams.city && invParams.city) {
+      const cityCmp = fuzzyText.compareCity(reqParams.city, invParams.city);
+      if (cityCmp.score >= 0.9) { total += 9; matchedOn.push('city'); }
+      else if (cityCmp.score >= 0.7) { total += 6; matchedOn.push('city_fuzzy'); }
     }
 
     // === BHK (20 pts) ===
     if (reqParams.bhkType && invParams.bhkType) {
       const reqBhk = parseInt(reqParams.bhkType);
       const invBhk = parseInt(invParams.bhkType);
-      if (reqBhk === invBhk) {
+      if (Number.isNaN(reqBhk) || Number.isNaN(invBhk)) {
+        // Non-numeric configs (e.g. "1RK", "Studio") — compare as text.
+        if (fuzzyText.isNear(reqParams.bhkType, invParams.bhkType, 0.85)) {
+          total += 20;
+          matchedOn.push('bhk');
+        }
+      } else if (reqBhk === invBhk) {
         total += 20;
         matchedOn.push('bhk');
-      } else if (Math.abs(reqBhk - invBhk) === 1) {
-        total += 8;
-        matchedOn.push('bhk_adjacent');
+      } else {
+        // Graded distance, so a 3BHK hunter still sees 2BHK stock ranked above
+        // nothing rather than being dropped entirely.
+        const delta = Math.abs(reqBhk - invBhk);
+        if (delta === 1) { total += 8; matchedOn.push('bhk_adjacent'); }
+        else if (delta === 2) { total += 4; }
       }
     }
 
     // === Property Type (10 pts) ===
+    // Was strict string equality, so "Flats / Apartments" never matched "Flat",
+    // "flat" or "2BHK Apartment". Normalised family comparison instead.
     if (reqParams.propertyType && invParams.propertyType) {
-      if (reqParams.propertyType === invParams.propertyType) {
-        total += 10;
-        matchedOn.push('property_type');
+      const cmp = propertyTypeNormalizer.matchScore(
+        reqParams.propertyType,
+        { propertyType: invParams.propertyType }
+      );
+      if (cmp.score != null && cmp.score > 0) {
+        total += Math.round(cmp.score * 10);
+        if (cmp.score >= 0.9) matchedOn.push('property_type');
+        else matchedOn.push('property_type_related');
+      }
+    }
+
+    // === Area / size (8 pts) ===
+    // The main discriminator for plots and land, where BHK is meaningless.
+    if (reqParams.area > 0 && invParams.area > 0) {
+      const sameUnit = (reqParams.areaUnit || 'sqft') === (invParams.areaUnit || 'sqft');
+      if (sameUnit) {
+        const diff = Math.abs(reqParams.area - invParams.area) / Math.max(reqParams.area, 1);
+        if (diff <= 0.1) { total += 8; matchedOn.push('area'); }
+        else if (diff <= 0.25) { total += 5; matchedOn.push('area_near'); }
+        else if (diff <= 0.5) { total += 2; }
       }
     }
 

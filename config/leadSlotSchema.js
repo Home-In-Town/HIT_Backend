@@ -35,61 +35,118 @@ const INTENTS = ['sell', 'buy', 'rent'];
 
 const SKIP_VALUE = '__skipped__';
 
+// ─── "Other" ────────────────────────────────────────────────────────────────
+// A single canonical value for "none of the above". The client pairs it with a
+// free-text box; the typed text is stored alongside the canonical value (see
+// flow.otherTexts → params.otherDetails) so we keep BOTH a matchable enum value
+// and the user's own words. Slots opt in with `allowOther: true`.
+const OTHER_VALUE = 'other';
+const OTHER_OPTION = { value: OTHER_VALUE, label: { en: 'Other', hi: 'Other' } };
+
+const asOptions = (list) => list.map((t) => ({ value: t, label: { en: t, hi: t } }));
+const withOther = (list) => [...asOptions(list), OTHER_OPTION];
+
 // ─── Detailed property types per category ───────────────────────────────────
-// Categories are the four real-world buckets users think in; each maps to the
-// property types that actually belong to it.
+// Categories are the real-world buckets users think in; each maps to the
+// property types that actually belong to it. Every list gets an "Other" chip
+// appended automatically, so it is never hardcoded into a list.
 const CATEGORY_TYPES = {
   Residential: [
     'Flats / Apartments',
     'Independent Houses & Villas',
     'Builder Floor',
-    'Farmhouses',
-    'Other'
+    'Penthouse',
+    'Studio Apartment / 1RK',
+    'Row House',
+    'Duplex',
+    'Service Apartment',
+    'Farmhouses'
   ],
   Commercial: [
     'Shops & Showrooms',
     'Office Spaces',
-    'Warehouses & Godowns',
-    'Factories & Industrial Sheds',
-    'Other'
+    'Co-working Space',
+    'Commercial Complex',
+    'Restaurants & Cafes',
+    'Hotels & Resorts',
+    'Schools & Institutes',
+    'Hospitals & Clinics',
+    'Warehouses & Godowns'
   ],
   'Plots / Land': [
-    'Residential Plots',
+    'Residential Plot',
+    'Commercial Plot',
+    'Industrial Plot',
+    'NA Plot',
+    'Gated Layout Plot',
+    'Corner Plot'
+  ],
+  'Agricultural / Farm Land': [
     'Agricultural Land',
-    'Commercial / Industrial Land',
-    'Other'
+    'Farm Land',
+    'Irrigated Land',
+    'Barren / Dry Land',
+    'Orchard / Plantation',
+    'Farmhouse with Land'
+  ],
+  Industrial: [
+    'Industrial Shed',
+    'Factory',
+    'Warehouse / Godown',
+    'Industrial Plot',
+    'Cold Storage'
   ],
   'PG / Co-living': [
     'PG (Paying Guest)',
     'Co-living Space',
     'Hostel',
-    'Other'
+    'Single Room',
+    'Shared Room'
   ]
 };
 
-// Flat list of every property type — used by the BUY / RENT flow, which asks for
-// the type directly without first asking for a category.
-const ALL_PROPERTY_TYPES = [
+// Built residential units — the only ones with a BHK count.
+const RESIDENTIAL_BUILT_TYPES = [
   'Flats / Apartments',
   'Independent Houses & Villas',
   'Builder Floor',
-  'Farmhouses',
+  'Penthouse',
+  'Studio Apartment / 1RK',
+  'Row House',
+  'Duplex',
+  'Service Apartment',
+  'Farmhouses'
+];
+
+// Anything with a structure on it — possession/construction stage applies here
+// but not to raw land.
+const BUILT_TYPES = [
+  ...RESIDENTIAL_BUILT_TYPES,
   'Shops & Showrooms',
   'Office Spaces',
+  'Co-working Space',
+  'Commercial Complex',
+  'Restaurants & Cafes',
+  'Hotels & Resorts',
+  'Schools & Institutes',
+  'Hospitals & Clinics',
   'Warehouses & Godowns',
-  'Factories & Industrial Sheds',
-  'Residential Plots',
-  'Agricultural Land',
-  'Commercial / Industrial Land',
-  'PG / Co-living Space'
+  'Industrial Shed',
+  'Factory',
+  'Warehouse / Godown',
+  'Cold Storage'
+];
+
+// Flat list of every property type — used by the BUY / RENT flow, which asks for
+// the type directly without first asking for a category. Deduped across
+// categories (e.g. "Industrial Plot" appears in two buckets).
+const ALL_PROPERTY_TYPES = [
+  ...new Set(Object.values(CATEGORY_TYPES).flat())
 ];
 
 // Build { category: [{value,label}] } for the detailed sell propertyType slot.
 const sellPropertyTypeOptionsByCategory = Object.fromEntries(
-  Object.entries(CATEGORY_TYPES).map(([cat, list]) => [
-    cat,
-    list.map((t) => ({ value: t, label: { en: t, hi: t } }))
-  ])
+  Object.entries(CATEGORY_TYPES).map(([cat, list]) => [cat, withOther(list)])
 );
 
 // A curated short amenities list for the chat (full 60+ list lives on the form).
@@ -127,13 +184,8 @@ const slots = [
       en: 'What category is your property?',
       hi: 'Aapki property kis category ki hai?'
     },
-    allowCustom: true, // the client offers an "Other" chip on every choice slot
-    options: [
-      { value: 'Residential', label: { en: 'Residential', hi: 'Residential' } },
-      { value: 'Commercial', label: { en: 'Commercial', hi: 'Commercial' } },
-      { value: 'Plots / Land', label: { en: 'Plots / Land', hi: 'Plots / Land' } },
-      { value: 'PG / Co-living', label: { en: 'PG & Co-living Space', hi: 'PG & Co-living Space' } }
-    ]
+    allowOther: true, // "Other" chip + free text, both stored
+    options: withOther(Object.keys(CATEGORY_TYPES))
   },
 
   // SELL-ONLY: detailed property type (options depend on the chosen category)
@@ -142,12 +194,16 @@ const slots = [
     inputType: 'choice',
     required: true,
     appliesToIntent: ['sell'],
-    allowCustom: true, // "Other" → let the user type the exact type
+    allowOther: true, // "Other" → let the user type the exact type
     question: {
       en: 'What type of property is it?',
       hi: 'Property ka type kya hai?'
     },
-    optionsByAnswer: { category: sellPropertyTypeOptionsByCategory }
+    optionsByAnswer: { category: sellPropertyTypeOptionsByCategory },
+    // When the category was answered with "Other" (or a custom string), there is
+    // no per-category list — fall back to every known type so the user still
+    // gets a picklist instead of an empty control.
+    optionsFallback: withOther(ALL_PROPERTY_TYPES)
   },
 
   // ─── 2. Property type (BUY / RENT — simple list) ──────────────────────────
@@ -156,13 +212,13 @@ const slots = [
     inputType: 'choice',
     required: true,
     appliesToIntent: ['buy', 'rent'],
-    allowCustom: true, // real world has more types than the 5 presets
+    allowOther: true, // real world has more types than any preset list
     question: { en: 'What type of property is it?', hi: 'Kis type ki property hai?' },
     questionByIntent: {
       buy: { en: 'What type of property are you looking for?', hi: 'Aap kis type ki property dhoond rahe hain?' },
       rent: { en: 'What type of property is it (for rent)?', hi: 'Rent ke liye kis type ki property hai?' }
     },
-    options: ALL_PROPERTY_TYPES.map((t) => ({ value: t, label: { en: t, hi: t } }))
+    options: withOther(ALL_PROPERTY_TYPES)
   },
 
   // ─── 3. BHK ───────────────────────────────────────────────────────────────
@@ -174,8 +230,8 @@ const slots = [
     // Only built residential units have a BHK count. Plots/land, commercial and
     // PG/co-living skip this question entirely.
     branchIf: {
-      propertyType: ['Flats / Apartments', 'Independent Houses & Villas', 'Builder Floor', 'Farmhouses'],
-      propertyTypeDetailed: ['Flats / Apartments', 'Independent Houses & Villas', 'Builder Floor', 'Farmhouses']
+      propertyType: RESIDENTIAL_BUILT_TYPES,
+      propertyTypeDetailed: RESIDENTIAL_BUILT_TYPES
     },
     branchMatch: 'any', // matches if EITHER propertyType or propertyTypeDetailed qualifies
     allowCustom: true, // e.g. 1RK, studio, 2.5BHK, 5BHK — presets aren't exhaustive
@@ -248,11 +304,14 @@ const slots = [
     required: false,
     skippable: true,
     appliesToIntent: ['sell'],
+    allowOther: true,
     question: { en: 'What is the construction status?', hi: 'Construction status kya hai?' },
     options: [
       { value: 'ready-to-move', label: { en: 'Ready to move', hi: 'Ready to move' } },
       { value: 'under-construction', label: { en: 'Under construction', hi: 'Under-construction' } },
-      { value: 'pre-launch', label: { en: 'Pre-launch', hi: 'Pre-launch' } }
+      { value: 'pre-launch', label: { en: 'Pre-launch', hi: 'Pre-launch' } },
+      { value: 'resale', label: { en: 'Resale', hi: 'Resale' } },
+      OTHER_OPTION
     ]
   },
 
@@ -264,12 +323,8 @@ const slots = [
     skippable: true,
     appliesToIntent: ['buy', 'rent'],
     // Possession stage only makes sense for built property, not raw land.
-    branchIf: {
-      propertyType: [
-        'Flats / Apartments', 'Independent Houses & Villas', 'Builder Floor', 'Farmhouses',
-        'Shops & Showrooms', 'Office Spaces', 'Warehouses & Godowns', 'Factories & Industrial Sheds'
-      ]
-    },
+    branchIf: { propertyType: BUILT_TYPES },
+    allowOther: true,
     question: { en: 'Ready to move or under construction?', hi: 'Ready hai ya under-construction?' },
     questionByIntent: {
       buy: { en: 'Do you want ready to move or under construction?', hi: 'Ready chahiye ya under-construction chalega?' },
@@ -277,7 +332,8 @@ const slots = [
     },
     options: [
       { value: 'ready', label: { en: 'Ready to move', hi: 'Ready to move' } },
-      { value: 'under_construction', label: { en: 'Under construction', hi: 'Under-construction' } }
+      { value: 'under_construction', label: { en: 'Under construction', hi: 'Under-construction' } },
+      OTHER_OPTION
     ]
   },
 
@@ -306,10 +362,13 @@ const slots = [
     required: false,
     skippable: true,
     appliesToIntent: ['sell'],
+    allowOther: true,
     question: { en: 'Is it RERA approved?', hi: 'Kya ye RERA approved hai?' },
     options: [
       { value: 'yes', label: { en: 'Yes', hi: 'Haan' } },
-      { value: 'no', label: { en: 'No', hi: 'Nahi' } }
+      { value: 'no', label: { en: 'No', hi: 'Nahi' } },
+      { value: 'applied', label: { en: 'Applied / In process', hi: 'Applied / process me' } },
+      OTHER_OPTION
     ]
   },
   {
@@ -327,10 +386,13 @@ const slots = [
     required: false,
     skippable: true,
     appliesToIntent: ['sell'],
+    allowOther: true,
     question: { en: 'Is bank loan available on this property?', hi: 'Is property pe bank loan available hai?' },
     options: [
       { value: 'yes', label: { en: 'Yes', hi: 'Haan' } },
-      { value: 'no', label: { en: 'No', hi: 'Nahi' } }
+      { value: 'no', label: { en: 'No', hi: 'Nahi' } },
+      { value: 'not_sure', label: { en: 'Not sure', hi: 'Pata nahi' } },
+      OTHER_OPTION
     ]
   },
   {
@@ -350,7 +412,9 @@ const slots = [
     inputType: 'choice',
     required: false,
     skippable: true,
-    allowCustom: true,
+    // Deliberately NO allowOther/allowCustom here. params.urgency is a hard enum
+    // on ExtractedLead, so a free-text value used to throw on create and abort
+    // the whole lead save. "Skip" covers "none of these" safely instead.
     question: { en: 'How soon?', hi: 'Kitni jaldi hai?' },
     questionByIntent: {
       sell: { en: 'How soon do you want to sell?', hi: 'Kitni jaldi bechna hai?' },
@@ -360,8 +424,7 @@ const slots = [
     options: [
       { value: 'immediate', label: { en: 'Immediate', hi: 'Immediate' } },
       { value: '1_2_months', label: { en: '1-2 months', hi: '1-2 month' } },
-      { value: 'exploring', label: { en: 'Just exploring', hi: 'Exploring' } },
-      { value: 'other', label: { en: 'Other', hi: 'Other' } }
+      { value: 'exploring', label: { en: 'Just exploring', hi: 'Exploring' } }
     ]
   },
 
@@ -380,7 +443,12 @@ const slotsById = slots.reduce((acc, s) => { acc[s.id] = s; return acc; }, {});
 module.exports = {
   INTENTS,
   SKIP_VALUE,
+  OTHER_VALUE,
+  OTHER_OPTION,
   CATEGORY_TYPES,
+  ALL_PROPERTY_TYPES,
+  RESIDENTIAL_BUILT_TYPES,
+  BUILT_TYPES,
   slots,
   slotsById
 };

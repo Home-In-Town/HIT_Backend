@@ -15,7 +15,7 @@ const groupMessageSchema = new mongoose.Schema({
   // Message type determines how the message renders
   messageType: {
     type: String,
-    enum: ['text', 'inventory_card', 'requirement_card', 'system'],
+    enum: ['text', 'inventory_card', 'requirement_card', 'system', 'project_announcement'],
     default: 'text'
   },
   // Plain text content (for text/system messages)
@@ -44,6 +44,33 @@ const groupMessageSchema = new mongoose.Schema({
     loanRequired: { type: Boolean, default: false },
     urgency: { type: String, enum: ['normal', 'urgent', 'very_urgent'], default: 'normal' },
     clientNotes: { type: String, default: '' }
+  },
+
+  // === Project Announcement Card ===
+  // Broadcast into HIT Community when a project is published or significantly
+  // edited. Stores a SNAPSHOT so the card renders stably even if the project is
+  // later edited, unpublished, or deleted.
+  projectAnnouncement: {
+    project: { type: mongoose.Schema.Types.ObjectId, ref: 'Project' },
+    kind: { type: String, enum: ['new', 'updated'], default: 'new' },
+    // Project snapshot
+    projectName: { type: String },
+    coverImageUrl: { type: String },
+    slug: { type: String },
+    location: { type: String },
+    city: { type: String },
+    startingPrice: { type: Number },     // raw rupees
+    bhkOptions: [String],
+    projectStatus: { type: String },
+    reraNumber: { type: String },
+    bankLoanAvailable: { type: Boolean, default: false },
+    // Builder identity snapshot
+    builderName: { type: String },
+    builderCompany: { type: String },
+    isVerifiedBuilder: { type: Boolean, default: false },
+    builderRating: { type: Number, default: 0 },
+    // Only for kind: 'updated' — human-readable list of what changed
+    changedFields: [String]
   },
 
   // Auto-match results stored on requirement cards

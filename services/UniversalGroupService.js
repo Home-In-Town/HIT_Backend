@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const GroupRoom = require('../models/GroupRoom');
 const User = require('../models/User');
+const propertyTypeNormalizer = require('./PropertyTypeNormalizer');
 
 /**
  * UniversalGroupService
@@ -12,6 +13,48 @@ const User = require('../models/User');
  */
 
 const UNIVERSAL_GROUP_NAME = 'HIT Community';
+
+/**
+ * Format a stored sqft size into a human-friendly string. Sizes are stored in
+ * sqft (see the upload form / matcher), but for land the seller thinks in acres,
+ * so we surface an approximate acre value alongside large sqft figures.
+ *
+ * "217800 sqft"        → "217800 sqft (≈ 5 acre)"
+ * "900 - 5000 sqft"    → "900 - 5000 sqft"
+ * "1200"               → "1200 sqft"
+ */
+function _formatSize(raw) {
+  if (!raw || typeof raw !== 'string') return '';
+  const nums = (raw.match(/\d+(?:\.\d+)?/g) || []).map(Number).filter(n => n > 0);
+  if (nums.length === 0) return raw.trim();
+
+  const base = /sq\.?\s*ft|sqft/i.test(raw) ? raw.trim() : `${raw.trim()} sqft`;
+
+  // Add an acre hint when the size is large enough that acres are the natural unit.
+  const max = Math.max(...nums);
+  if (max >= 20000) {
+    const acres = (max / 43560);
+    const acreStr = acres >= 10 ? Math.round(acres) : acres.toFixed(2).replace(/\.?0+$/, '');
+    return `${base} (≈ ${acreStr} acre)`;
+  }
+  return base;
+}
+
+/**
+ * Build the pinned "project details" system message, TYPE-AWARE:
+ *   - Land / plot / farm types → show plot size (with acre hint), not BHK.
+ *   - BHK-bearing types (flat/villa/etc.) → show BHK config.
+ *   - Mixed use → show whichever size/config is present.
+ * Kept in one place so both creation and refresh render identical content.
+ */
+function buildProjectInfoMessage(project) {
+  // Merge note: this used to build its own (shorter) pin text while
+  // buildProjectDetailsContent built a richer one. Two builders meant the pin
+  // content flip-flopped on every project edit, because refreshProjectSubGroupPin
+  // and ensureProjectGroup target the SAME pinned message. There is now one
+  // builder; the type-aware land/BHK logic from this function moved into it.
+  return buildProjectDetailsContent(project);
+}
 
 /**
  * Ensure the universal group exists. Called on server startup.
@@ -182,15 +225,23 @@ function buildProjectDetailsContent(project) {
   const photoCount = (media.coverImage?.url ? 1 : 0) + galleryCount;
   const locality = [project.location, project.city].filter(Boolean).join(', ');
   const type = [project.category, project.propertyType || project.projectType].filter(Boolean).join(' · ');
-  const bhk = (cfg.bhkOptions || []).filter(Boolean).join(', ');
-  const area = cfg.carpetAreaRange || cfg.plotSizeRange || '';
+
+  // Type-aware specs (kept from the incoming branch): land has no BHK, so show
+  // plot size instead of pretending it's a flat.
+  const typeInfo = propertyTypeNormalizer.fromProject(project);
+  const isLand = ['plot', 'farm_land', 'commercial_plot'].includes(typeInfo.family);
+  const bhk = isLand ? '' : (cfg.bhkOptions || []).filter(Boolean).join(', ');
+  const area = isLand
+    ? _formatSize(cfg.plotSizeRange || cfg.carpetAreaRange)
+    : _formatSize(cfg.carpetAreaRange || cfg.plotSizeRange);
+  const areaLabel = isLand ? 'Plot Size' : 'Area';
 
   const lines = [
     `📋 ${project.projectName || 'Property'}`,
     locality ? `📍 Location: ${locality}` : '',
     type ? `🏷️ Type: ${type}` : '',
     bhk ? `🏠 Configuration: ${bhk}` : '',
-    area ? `📐 Area: ${area}` : '',
+    area ? `📐 ${areaLabel}: ${area}` : '',
     formatINR(pricing.startingPrice) ? `💰 Starting Price: ${formatINR(pricing.startingPrice)}` : '',
     pricing.totalPriceRange ? `💵 Price Range: ${pricing.totalPriceRange}` : '',
     formatINR(pricing.pricePerSqFt) ? `📊 Rate: ${formatINR(pricing.pricePerSqFt)}/sq.ft` : '',
@@ -399,6 +450,11 @@ async function findOrCreateProjectSubGroup(project, agentId, io) {
   const ownerId = room.createdBy ? room.createdBy.toString() : '';
   const groupName = room.name;
 
+  // Merge note: the incoming branch created the room here with a findOneAndUpdate
+  // upsert. That whole block is now dead — ensureProjectGroup() above already
+  // created (or found) the room and posted its details pin, and it does so with
+  // validators running and a unique index guarding against duplicates. Keeping
+  // their version would also have redeclared `isNew` and reassigned a const.
   if (!agentId || !mongoose.Types.ObjectId.isValid(agentId.toString())) {
     return { room, isNew, alreadyMember: false };
   }
@@ -448,17 +504,246 @@ async function findOrCreateProjectSubGroup(project, agentId, io) {
   return { room: fresh || room, isNew, alreadyMember: !added };
 }
 
+/**
+ * Refresh the pinned project-details system message for a project's sub-group.
+ *
+ * The pin is written once at sub-group creation and would otherwise freeze the
+ * project's state at that moment (stale price, old BHK, missing plot size). Call
+ * this whenever the project is edited so the pin reflects current details.
+ *
+ * Non-blocking / idempotent: does nothing if no sub-group exists; updates the
+ * existing "📋 Project:" system message in place, or creates one if missing.
+ *
+ * @param {object} project - The project (should include configuration, pricing,
+ *   propertyType, projectStatus). Owner id used as the system-message sender.
+ * @param {object} [io] - Socket.io instance to broadcast the update.
+ * @returns {Promise<boolean>} true if a pin was updated/created.
+ */
+async function refreshProjectSubGroupPin(project, io) {
+  try {
+    if (!project?._id) return false;
+
+    const room = await GroupRoom.findOne({
+      project: project._id,
+      roomType: 'project',
+      isAutoCreated: true,
+      active: true
+    });
+    if (!room) return false; // No sub-group yet — nothing to refresh.
+
+    const GroupMessage = require('../models/GroupMessage');
+    const newContent = buildProjectInfoMessage(project);
+
+    // Locate the pinned details message: earliest system message that starts
+    // with the "📋 Project:" marker.
+    const pin = await GroupMessage.findOne({
+      room: room._id,
+      messageType: 'system',
+      content: { $regex: '^📋 Project:' }
+    }).sort({ createdAt: 1 });
+
+    let messageId;
+    if (pin) {
+      if (pin.content !== newContent) {
+        pin.content = newContent;
+        await pin.save();
+      }
+      messageId = pin._id;
+    } else {
+      const ownerId = project.owner?._id?.toString() || project.owner?.toString();
+      const created = await GroupMessage.create({
+        room: room._id,
+        sender: ownerId,
+        messageType: 'system',
+        content: newContent
+      });
+      messageId = created._id;
+    }
+
+    // Broadcast so open clients re-render the pin.
+    if (io) {
+      io.to(`group_${room._id}`).emit('project_info_updated', {
+        roomId: room._id.toString(),
+        messageId: messageId?.toString(),
+        content: newContent
+      });
+    }
+
+    return true;
+  } catch (err) {
+    console.error('refreshProjectSubGroupPin error (non-blocking):', err.message);
+    return false;
+  }
+}
+
+/**
+ * Build the projectAnnouncement snapshot subdocument from a project.
+ * The project should be populated with `owner` (name, companyName, role,
+ * verificationStatus[, rating, ratingCount]).
+ */
+function _buildAnnouncementSnapshot(project, kind, changedFields = []) {
+  const owner = project.owner || {};
+  const verifiedBuilder =
+    owner.isVerifiedBuilder === true ||
+    owner.verificationStatus?.builder === 'verified';
+
+  return {
+    project: project._id,
+    kind,
+    projectName: project.projectName || '',
+    coverImageUrl: project.media?.coverImage?.url || '',
+    slug: project.slug || '',
+    location: project.location || '',
+    city: project.city || '',
+    startingPrice: project.pricing?.startingPrice || 0,
+    bhkOptions: project.configuration?.bhkOptions || [],
+    projectStatus: project.projectStatus || '',
+    reraNumber: project.reraNumber || '',
+    bankLoanAvailable: !!project.pricing?.bankLoanAvailable,
+    builderName: owner.name || '',
+    builderCompany: owner.companyName || '',
+    isVerifiedBuilder: !!verifiedBuilder,
+    builderRating: owner.rating || 0,
+    changedFields: kind === 'updated' ? changedFields : []
+  };
+}
+
+/**
+ * Detect whether an edit is "significant" enough to announce.
+ * Compares a whitelist of buyer-facing fields between the pre-update snapshot
+ * and the updated project. Returns a human-readable list of what changed.
+ *
+ * @param {object} before - Plain project object BEFORE the update.
+ * @param {object} after  - Plain project object AFTER the update.
+ * @returns {string[]} - Labels of significant changes (empty = not significant).
+ */
+function detectSignificantChanges(before, after) {
+  const changes = [];
+  if (!before || !after) return changes;
+
+  const beforePrice = before.pricing?.startingPrice || 0;
+  const afterPrice = after.pricing?.startingPrice || 0;
+  if (beforePrice !== afterPrice) changes.push('Price updated');
+
+  if ((before.projectStatus || '') !== (after.projectStatus || '')) {
+    changes.push('Status updated');
+  }
+
+  const beforeBhk = (before.configuration?.bhkOptions || []).slice().sort().join(',');
+  const afterBhk = (after.configuration?.bhkOptions || []).slice().sort().join(',');
+  if (beforeBhk !== afterBhk) changes.push('Configuration updated');
+
+  const beforeGallery = before.media?.galleryImages?.length || 0;
+  const afterGallery = after.media?.galleryImages?.length || 0;
+  if (afterGallery > beforeGallery) changes.push('New photos added');
+
+  const beforeCover = before.media?.coverImage?.url || '';
+  const afterCover = after.media?.coverImage?.url || '';
+  if (beforeCover !== afterCover) changes.push('Cover image updated');
+
+  return changes;
+}
+
+/**
+ * Post a persistent project announcement card into the HIT Community room.
+ * Non-blocking / idempotent-ish: safe to call fire-and-forget. Snapshots the
+ * project + builder identity so the card renders stably over time.
+ *
+ * @param {object} project - Project populated with `owner`.
+ * @param {'new'|'updated'} kind
+ * @param {object} [io] - Socket.io instance.
+ * @param {string[]} [changedFields] - Only used for kind === 'updated'.
+ * @returns {Promise<object|null>} The created message, or null if skipped.
+ */
+async function postProjectAnnouncement(project, kind = 'new', io, changedFields = []) {
+  try {
+    if (!project?._id) return null;
+
+    const room = await getUniversalGroup();
+    if (!room) return null; // Community room not ready — skip silently.
+
+    const GroupMessage = require('../models/GroupMessage');
+    const ownerId = project.owner?._id?.toString() || project.owner?.toString();
+
+    // There is at most ONE announcement card per project. If one already exists,
+    // update it in place (flip to "updated", refresh snapshot) instead of posting
+    // a second card. This keeps a single, self-updating card in the conversation.
+    const existing = await GroupMessage.findOne({
+      room: room._id,
+      messageType: 'project_announcement',
+      'projectAnnouncement.project': project._id
+    });
+
+    // If the card already exists, any subsequent announcement is an "update",
+    // regardless of the caller's `kind` (e.g. re-publish after edit).
+    const effectiveKind = existing ? 'updated' : kind;
+    const snapshot = _buildAnnouncementSnapshot(project, effectiveKind, changedFields);
+    const content = effectiveKind === 'new'
+      ? `New project published: ${snapshot.projectName}`
+      : `Project updated: ${snapshot.projectName}`;
+
+    let message;
+    let isUpdate = false;
+
+    if (existing) {
+      isUpdate = true;
+      existing.content = content;
+      existing.projectAnnouncement = snapshot;
+      existing.sender = ownerId || existing.sender;
+      await existing.save();
+      message = existing;
+    } else {
+      message = await GroupMessage.create({
+        room: room._id,
+        sender: ownerId,
+        messageType: 'project_announcement',
+        content,
+        projectAnnouncement: snapshot
+      });
+    }
+
+    // Bump room activity so it surfaces at the top of everyone's list.
+    await GroupRoom.updateOne({ _id: room._id }, { $set: { lastActivity: new Date() } });
+
+    // Broadcast to open clients in the community room.
+    if (io) {
+      const populated = await GroupMessage.findById(message._id)
+        .populate('sender', 'name role companyName')
+        .lean();
+      const payload = { ...populated, roomId: room._id.toString() };
+      // New card → append via the normal message event.
+      // Existing card → dedicated update event so clients replace it in place.
+      io.to(`group_${room._id}`).emit(
+        isUpdate ? 'project_announcement_updated' : 'group_message',
+        payload
+      );
+    }
+
+    return message;
+  } catch (err) {
+    console.error('postProjectAnnouncement error (non-blocking):', err.message);
+    return null;
+  }
+}
+
 module.exports = {
   ensureUniversalGroup,
   getUniversalGroup,
   addUserToUniversalGroup,
   findOrCreateProjectSubGroup,
+  // Merge note: BOTH sides are exported. ProjectController.update calls
+  // refreshProjectSubGroupPin / detectSignificantChanges / postProjectAnnouncement,
+  // so dropping the incoming names would have thrown "not a function" at runtime.
   ensureProjectGroup,
   syncProjectGroup,
   deactivateProjectGroup,
   buildProjectDetailsContent,
   projectGroupName,
   PROJECT_DETAIL_FIELDS,
+  refreshProjectSubGroupPin,
+  buildProjectInfoMessage,
+  postProjectAnnouncement,
+  detectSignificantChanges,
   clearCache,
   UNIVERSAL_GROUP_NAME
 };

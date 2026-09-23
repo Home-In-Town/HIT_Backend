@@ -17,6 +17,7 @@ const Project = require('../models/Project');
 const User = require('../models/User'); // Required for populate('owner')
 const locationNormalizer = require('./LocationNormalizer');
 const propertyTypeNormalizer = require('./PropertyTypeNormalizer');
+const fuzzyText = require('./FuzzyText');
 const Logger = require('../utils/logger');
 const logger = new Logger('MatchEngineV2');
 
@@ -53,7 +54,7 @@ class MatchEngineV2 {
       nearestLimit = 3,
     } = options;
 
-    const SELECT = 'projectName projectType category propertyType city location latitude longitude pricing configuration projectStatus owner media slug reraApproved landmarks';
+    const SELECT = 'projectName projectType category propertyType city location latitude longitude pricing configuration projectStatus owner media slug reraApproved reraNumber landmarks';
 
     try {
       // Progressive widening: start strict, then relax one constraint at a time.
@@ -61,6 +62,11 @@ class MatchEngineV2 {
       // (BHK / budget / exact locality) produced zero matches.
       const tiers = this._buildQueryTiers(requirement, excludeOwner);
 
+      // Merge note: the incoming branch fetched candidates with ONE query. That
+      // single over-constrained AND query is exactly what made one differing
+      // detail return zero matches, so the tiered widening below is kept. The
+      // extra fields their query selected (reraNumber, owner rating) are folded
+      // into SELECT and the populate inside the loop so result cards stay rich.
       const seen = new Set();
       const candidates = [];
       let tiersUsed = 0;
@@ -68,7 +74,7 @@ class MatchEngineV2 {
       for (const query of tiers) {
         tiersUsed++;
         const batch = await Project.find(query)
-          .populate('owner', 'name companyName role verificationStatus')
+          .populate('owner', 'name companyName role verificationStatus rating ratingCount')
           .select(SELECT)
           .limit(80)
           .lean();
@@ -313,6 +319,17 @@ class MatchEngineV2 {
     totalScore += bhkScore.score;
     if (bhkScore.score > 0 && !bhkScore.near) matchedOn.push('bhk');
 
+    // === Area / Size Match (14 points max) ===
+    // Compares a requirement's area (sqft-normalized) against the project's
+    // plot/carpet size range. This is the primary discriminator for land, plot,
+    // farm and commercial inventory — where BHK is meaningless. For those types
+    // BHK scores 0, so area effectively takes BHK's slot; for BHK types it adds
+    // a modest signal when an area is also stated.
+    const areaScore = this._scoreArea(requirement, project);
+    breakdown.area = areaScore;
+    totalScore += areaScore.score;
+    if (areaScore.score > 0) matchedOn.push('area');
+
     // === Loan Match (6 points max) ===
     const loanScore = this._scoreLoan(requirement, project);
     breakdown.loan = loanScore;
@@ -424,13 +441,36 @@ class MatchEngineV2 {
       }
     }
 
+    // Typo/spacing-tolerant locality compare, before falling back to city level.
+    // LocationNormalizer only recognises localities present in its alias map, so
+    // a misspelled or newly-seen locality used to drop straight to city scoring.
+    // This catches "Manish Ngr" vs "Manish Nagar", "civillines" vs "Civil Lines",
+    // reordered words and stray whitespace.
+    if (projectLocation) {
+      const fz = fuzzyText.compare(rawLocation, projectLocation);
+      if (fz.score >= 0.95) {
+        return { score: 27, method: 'location_fuzzy_exact', confidence: 0.9, fuzzy: fz.method };
+      }
+      if (fz.score >= 0.85) {
+        return { score: 22, method: 'location_fuzzy_strong', confidence: 0.75, fuzzy: fz.method };
+      }
+      if (fz.score >= 0.7) {
+        // A real but imperfect locality signal — graded, and flagged `near` so it
+        // is never reported as an actual location match.
+        return { score: 15, method: 'location_fuzzy_near', confidence: 0.55, fuzzy: fz.method, near: true };
+      }
+    }
+
     // City-level match as last resort — this is the "Koradi asked, Nagpur stock"
-    // case: the locality differs but it's still the right city.
+    // case: the locality differs but it's still the right city. Compared fuzzily
+    // so "Ngpur"/"Nagpour" still resolve to Nagpur.
     if (requirement.city && projectCity) {
-      const reqCity = requirement.city.toLowerCase();
-      const projCity = projectCity.toLowerCase();
-      if (projCity.includes(reqCity) || reqCity.includes(projCity)) {
+      const cityCmp = fuzzyText.compareCity(requirement.city, projectCity);
+      if (cityCmp.score >= 0.9) {
         return { score: 8, method: 'city_only', confidence: 0.4 };
+      }
+      if (cityCmp.score >= 0.7) {
+        return { score: 6, method: 'city_fuzzy', confidence: 0.3, near: true };
       }
       // Different city entirely → tiny score so it can still be offered as a
       // nearest match, but it can never outrank same-city stock (8 > 2).
@@ -513,6 +553,72 @@ class MatchEngineV2 {
   }
 
   /**
+   * Score how well the requirement's area (sqft) fits the project's size range.
+   * Returns up to 14 points. Neutral (0) when either side has no usable area.
+   *
+   * The project's size comes from plotSizeRange (land) or carpetAreaRange
+   * (built-up), parsed into a [min,max] sqft window. Scoring:
+   *   - requirement area inside the window            → 14  (in_range)
+   *   - within 10% outside the window                 → 11  (near)
+   *   - within 25% outside                            → 7   (loose)
+   *   - otherwise                                     → 0   (mismatch)
+   * If the project exposes only a single size (not a range), compare by percent
+   * difference against that value with the same bands.
+   */
+  _scoreArea(requirement, project) {
+    const reqArea = requirement.area;
+    if (!reqArea || reqArea <= 0) return { score: 0, detail: 'no_req_area' };
+
+    const range = MatchEngineV2.parseProjectArea(project);
+    if (!range) return { score: 0, detail: 'no_proj_area' };
+
+    const [min, max] = range;
+
+    // Inside the project's advertised size window.
+    if (reqArea >= min && reqArea <= max) {
+      return { score: 14, detail: 'in_range', projRange: [min, max] };
+    }
+
+    // Outside — measure how far, relative to the nearest edge.
+    const edge = reqArea < min ? min : max;
+    const diff = Math.abs(reqArea - edge) / edge;
+    if (diff <= 0.10) return { score: 11, detail: 'near', projRange: [min, max] };
+    if (diff <= 0.25) return { score: 7, detail: 'loose', projRange: [min, max] };
+    return { score: 0, detail: `diff_${Math.round(diff * 100)}%`, projRange: [min, max] };
+  }
+
+  /**
+   * Parse a project's size into a [minSqft, maxSqft] range (sqft).
+   * Prefers plotSizeRange (land), falls back to carpetAreaRange (built-up).
+   *
+   * Handles the messy real-world formats seen in the DB:
+   *   "1200"                         → [1200, 1200]
+   *   "1000-2000" / "1000 - 2000"    → [1000, 2000]
+   *   "1060 TO 5952"                 → [1060, 5952]
+   *   "861 sqft to 3659 sqft"        → [861, 3659]
+   *   "1066, 1119, 1345, ..."        → [min, max] of the list
+   *   "650-1200sq ft"                → [650, 1200]
+   * Returns null when no numbers can be parsed.
+   *
+   * Static so both engines (forward + reverse) can share one implementation.
+   */
+  static parseProjectArea(project) {
+    const raw = project?.configuration?.plotSizeRange || project?.configuration?.carpetAreaRange;
+    if (!raw || typeof raw !== 'string') return null;
+
+    // Pull every number (including decimals) out of the free-text string.
+    const nums = (raw.match(/\d+(?:\.\d+)?/g) || [])
+      .map(Number)
+      .filter(n => !isNaN(n) && n > 0);
+
+    if (nums.length === 0) return null;
+
+    const min = Math.min(...nums);
+    const max = Math.max(...nums);
+    return [min, max];
+  }
+
+  /**
    * Calculate overall confidence in the match quality
    * Factors: location confidence, number of matching criteria, score distribution
    */
@@ -538,6 +644,15 @@ class MatchEngineV2 {
     // BHK match
     if (breakdown.bhk?.score >= 10) {
       confidence += 0.15;
+      factors++;
+    }
+
+    // Area/size match — the key discriminator for land/commercial inventory.
+    if (breakdown.area?.score >= 11) {
+      confidence += 0.15;
+      factors++;
+    } else if (breakdown.area?.score >= 7) {
+      confidence += 0.08;
       factors++;
     }
 
@@ -568,4 +683,8 @@ class MatchEngineV2 {
   }
 }
 
-module.exports = new MatchEngineV2();
+const matchEngineV2 = new MatchEngineV2();
+// Expose the static area parser on the singleton export so other services
+// (e.g. ReverseMatchService) can share one implementation of size parsing.
+matchEngineV2.parseProjectArea = MatchEngineV2.parseProjectArea.bind(MatchEngineV2);
+module.exports = matchEngineV2;

@@ -9,6 +9,11 @@ const mongoose = require('mongoose');
  * Lifecycle: auto_detected → confirmed → converted (DealRoom created) OR rejected
  */
 
+// How long a captured lead is retained. Must be >= the longest matching lookback
+// (ReverseMatchService uses 180 days) or leads are deleted before they can be
+// matched. Leads are the platform's core asset, so this is deliberately generous.
+const LEAD_RETENTION_DAYS = 730; // 2 years
+
 const matchResultSchema = new mongoose.Schema({
   project: { type: mongoose.Schema.Types.ObjectId, ref: 'Project' },
   score: { type: Number },         // 0-100
@@ -108,7 +113,16 @@ const extractedLeadSchema = new mongoose.Schema({
     reraApproved: { type: Boolean, default: null },
     reraNumber: { type: String, default: null },
     bankLoanAvailable: { type: Boolean, default: null },
-    amenities: { type: [String], default: undefined }       // key amenities selected in chat
+    amenities: { type: [String], default: undefined },      // key amenities selected in chat
+
+    // ─── "Other" free text ───────────────────────────────────────────────────
+    // When a question is answered with the "Other" chip, the canonical value is
+    // stored in its own field (e.g. projectStatus: 'other') and the user's exact
+    // words are kept here, keyed by slot id:
+    //   { projectStatus: 'Nearly done, 2 months left', bankLoanAvailable: 'Only SBI' }
+    // Mixed/loose on purpose — the set of questions evolves, and this must never
+    // reject a value and abort the lead save.
+    otherDetails: { type: mongoose.Schema.Types.Mixed, default: undefined }
   },
 
   // ─── Lead Direction ──────────────────────────────────────────────────────
@@ -177,9 +191,17 @@ const extractedLeadSchema = new mongoose.Schema({
   }],
 
   // ─── Expiry ──────────────────────────────────────────────────────────────
+  // Retention was 15 days, which silently HARD-DELETED every lead two weeks
+  // after capture. Two consequences:
+  //   1. Buy requirements disappeared, so they could never be reused later.
+  //   2. ReverseMatchService.LOOKBACK_DAYS = 180 was a no-op — nothing survived
+  //      long enough to be found, so newly published projects were matched
+  //      against an almost-empty pool of leads.
+  // Leads are small documents and are the core asset of the CRM, so retention is
+  // now measured in years. The TTL index is kept purely as long-tail housekeeping.
   expiresAt: {
     type: Date,
-    default: () => new Date(Date.now() + 15 * 24 * 60 * 60 * 1000) // 15 days
+    default: () => new Date(Date.now() + LEAD_RETENTION_DAYS * 24 * 60 * 60 * 1000)
   }
 }, {
   timestamps: true
@@ -191,6 +213,11 @@ extractedLeadSchema.index({ status: 1, createdAt: -1 });
 extractedLeadSchema.index({ 'params.locationCanonical': 1 });
 extractedLeadSchema.index({ source: 1, sourceRoom: 1 });
 extractedLeadSchema.index({ extractionConfidence: -1 });
-extractedLeadSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 }); // TTL index — auto-delete expired leads
+extractedLeadSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 }); // TTL index — long-tail housekeeping only
+// Reverse/cross matching scans by direction + recency; without this the 180-day
+// lookback did a collection scan on every project publish.
+extractedLeadSchema.index({ direction: 1, createdAt: -1 });
+extractedLeadSchema.index({ intent: 1, direction: 1, createdAt: -1 });
 
 module.exports = mongoose.model('ExtractedLead', extractedLeadSchema);
+module.exports.LEAD_RETENTION_DAYS = LEAD_RETENTION_DAYS;

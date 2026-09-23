@@ -48,6 +48,11 @@ const FAMILY_CATEGORY = {
   coworking: 'commercial',
   warehouse: 'commercial',
   hospitality: 'commercial',
+  // Institutional / healthcare buildings. Commercial in every practical sense
+  // (leased, priced per sqft) but distinct enough to deserve their own family so
+  // a school requirement doesn't score as an exact match for an office.
+  institutional: 'commercial',
+  healthcare: 'commercial',
 
   mixed_use: 'mixed_use',
 
@@ -65,6 +70,8 @@ const RELATED_GROUPS = [
   ['retail', 'showroom'],                                          // storefront
   ['warehouse', 'industry'],                                       // industrial
   ['pg_coliving', 'flat', 'studio', 'serviced_apartment'],         // shared living
+  ['institutional', 'healthcare', 'office'],                       // institutional buildings
+  ['hospitality', 'retail'],                                       // F&B / guest-facing
 ];
 
 // Keyword → family. Order matters: more specific phrases first.
@@ -75,7 +82,7 @@ const KEYWORD_RULES = [
 
   // Farm
   [/farm\s*house|farmhouse/, 'farm_house'],
-  [/farm\s*land|agricultur|krishi/, 'farm_land'],
+  [/farm\s*land|agricultur|krishi|orchard|plantation|\bbagh\b|\bbagicha\b/, 'farm_land'],
 
   // Land / plots (specific before generic 'plot')
   [/commercial\s*(plot|land)|industrial\s*(plot|land)/, 'commercial_plot'],
@@ -83,13 +90,14 @@ const KEYWORD_RULES = [
   [/\bplot\b|\bland\b|\bzameen\b|\bzamin\b|\bjameen\b/, 'plot'],
 
   // Shared living (before generic dwelling rules — "Co-living Space" must not
-  // fall through to something else)
+  // fall through to something else). "Single/Shared Room" are PG listings.
   [/\bpg\b|paying\s*guest|co[\s-]*living|\bhostel\b/, 'pg_coliving'],
+  [/\b(single|shared|double|triple)\s*(room|sharing|bed)\b|\bbed\s*space\b/, 'pg_coliving'],
 
   // Residential dwellings (specific before generic 'apartment/flat')
   [/studio/, 'studio'],
   [/penthouse/, 'penthouse'],
-  [/serviced\s*apartment/, 'serviced_apartment'],
+  [/services?d?\s*apartment|service\s*apartment/, 'serviced_apartment'],
   [/builder\s*floor|builder[\s-]*fl/, 'builder_floor'],
   [/apartment|\bflat\b|\bflats\b/, 'flat'],
   [/duplex/, 'duplex'],
@@ -104,8 +112,14 @@ const KEYWORD_RULES = [
   [/showroom/, 'showroom'],
   [/retail|\bshop\b|\bdukaan\b|\bdukan\b|\bstore\b/, 'retail'],
   [/warehouse|storage|godown/, 'warehouse'],
-  [/industry|industrial|factory/, 'industry'],
-  [/hospitality|hotel|resort|banquet/, 'hospitality'],
+  [/industry|industrial|factory|\bshed\b|manufacturing/, 'industry'],
+  [/hospitality|hotel|resort|banquet|restaurant|\bcafe\b|cafeteria|food\s*court|\bdhaba\b/, 'hospitality'],
+  // Institutional / healthcare — checked after the specific commercial rules so
+  // "office" style words still win when both appear.
+  [/school|college|institute|university|coaching|academy|education/, 'institutional'],
+  [/hospital|clinic|nursing\s*home|diagnostic|pathology|\bmedical\b/, 'healthcare'],
+  // Multi-tenant commercial buildings read as retail-led complexes.
+  [/commercial\s*complex|shopping\s*(complex|centre|center|mall)|\bmall\b|business\s*(park|centre|center|complex)/, 'retail'],
 ];
 
 // Direct value map for known enum-ish inputs (chat values, legacy projectType).
@@ -137,6 +151,10 @@ const DIRECT_MAP = {
   commercial: 'office',          // generic 'commercial' legacy → treat as office family (commercial category)
   commercial_plot: 'commercial_plot',
   mixed_use: 'mixed_use',
+  // The canonical "Other" answer from the chat. Resolves to the 'other' family
+  // (category null) so it is a KNOWN value rather than an unnormalisable one —
+  // the real description lives in params.otherDetails.
+  other: 'other',
 };
 
 // Category strings (from Project.category) → canonical category.

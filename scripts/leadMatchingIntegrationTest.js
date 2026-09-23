@@ -130,8 +130,10 @@ section('3. Reverse match agrees with forward match');
 
 const rev = reverse._calculateReverseScore(p, project);
 check('reverse score is usable', rev.total >= 35, String(rev.total));
+// Possession is worth 6 in reverse scoring, deliberately aligned with
+// MatchEngineV2._scorePossession (see the weight table in ReverseMatchService).
 check('reverse honours possession too',
-  rev.breakdown.possession === 7,
+  rev.breakdown.possession === 6,
   `possessionNeeded='${p.possessionNeeded}' → ${JSON.stringify(rev.breakdown.possession)}`);
 check('reverse counts budget', rev.breakdown.budget > 0, String(rev.breakdown.budget));
 check('reverse counts bhk', rev.breakdown.bhk > 0, String(rev.breakdown.bhk));

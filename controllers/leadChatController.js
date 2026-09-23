@@ -21,6 +21,7 @@ const User = require('../models/User');
 const leadFlowEngine = require('../services/LeadFlowEngine');
 const locationNormalizer = require('../services/LocationNormalizer');
 const matchEngineV2 = require('../services/MatchEngineV2');
+const crossMatchService = require('../services/CrossMatchService');
 const phrasings = require('../config/leadChatPhrasings');
 const { getAssistantIdAsync } = require('../services/AssistantIdentity');
 const Logger = require('../utils/logger');
@@ -75,6 +76,9 @@ async function postQuestion(session, slot, assistantId, user, ack) {
     unit: slot.unit || [],
     skippable: !!slot.skippable,
     allowCustom: !!slot.allowCustom,
+    // When true the client shows a single "Other" chip that reveals a text box;
+    // the answer is sent as { value: 'other', otherText: '…' }.
+    allowOther: !!slot.allowOther,
     progress: prog
   };
 
@@ -99,7 +103,7 @@ async function postQuestion(session, slot, assistantId, user, ack) {
  */
 async function postSummary(session, assistantId) {
   const flow = session.leadFlowState;
-  const summary = leadFlowEngine.buildSummary(flow.intent, flow.slots || {});
+  const summary = leadFlowEngine.buildSummary(flow.intent, flow.slots || {}, flow.otherTexts || {});
   const msg = await ChatMessage.create({
     session: session._id,
     sender: assistantId,
@@ -157,6 +161,7 @@ function freshFlowState() {
   return {
     intent: null,
     slots: {},
+    otherTexts: {},
     currentSlotId: 'intent',
     editingSlotId: null,
     status: 'in_progress'
@@ -236,16 +241,18 @@ exports.submitAnswer = async (req, res) => {
     const result = leadFlowEngine.parseAndValidate(slot, value, flow.slots || {});
     if (!result.valid) {
       // Re-ask the same slot with a corrective (varied) hint; state unchanged.
+      // The hint message is returned too — without it the client only saw the
+      // identical question reappear with no explanation of what went wrong.
       const hint = result.hint || phrasings.pickRetryHint(slot.inputType);
-      await postText(session, assistantId, hint);
+      const hintMessage = await postText(session, assistantId, hint);
       const q = await postQuestion(session, slot, assistantId, req.user);
-      return res.status(200).json({ valid: false, hint, message: q, flowState: flow });
+      return res.status(200).json({ valid: false, hint, hintMessage, message: q, flowState: flow });
     }
 
     // Record the user's answer as a chat message (right-aligned bubble).
     const displayVal = leadFlowEngine.isSkipped(result.value)
       ? 'Skipped'
-      : leadFlowEngine._displayValue(slot, result.value, flow.slots || {});
+      : leadFlowEngine._displayValue(slot, result.value, flow.slots || {}, result.otherText);
     await ChatMessage.create({
       session: session._id,
       sender: userId,
@@ -258,6 +265,12 @@ exports.submitAnswer = async (req, res) => {
     flow.slots = flow.slots || {};
     flow.slots[slotId] = result.value;
 
+    // Keep the verbatim text typed next to an "Other" choice, alongside (not
+    // instead of) the canonical value. Re-answering a slot clears any stale text.
+    flow.otherTexts = flow.otherTexts || {};
+    if (result.otherText) flow.otherTexts[slotId] = result.otherText;
+    else delete flow.otherTexts[slotId];
+
     // Setting the intent starts/keeps the lead conversation.
     if (slotId === 'intent') flow.intent = result.value;
 
@@ -265,6 +278,10 @@ exports.submitAnswer = async (req, res) => {
     if (isEditing) {
       flow.slots = leadFlowEngine.pruneInapplicable(flow.intent, flow.slots);
       flow.editingSlotId = null;
+      // Drop "Other" text for answers that no longer apply after the edit.
+      for (const key of Object.keys(flow.otherTexts)) {
+        if (flow.slots[key] === undefined) delete flow.otherTexts[key];
+      }
     }
 
     session.leadFlowState = flow;
@@ -364,8 +381,26 @@ exports.confirmLead = async (req, res) => {
       return res.status(400).json({ error: 'Conversation is not complete yet.' });
     }
 
+    // Idempotency guard. isComplete() stays true after a successful confirm, so
+    // every repeat call (double-tap, network retry, stale client) used to persist
+    // another identical ExtractedLead — five duplicates of one lead were found in
+    // production. Return the lead already created instead.
+    if (flow.status === 'completed' && flow.leadId) {
+      return res.status(200).json({
+        leadId: flow.leadId,
+        duplicate: true,
+        matchCount: flow.lastMatchCount || 0,
+        resultsMessage: null,
+        closingMessage: null,
+        actionsMessage: null,
+        flowState: flow
+      });
+    }
+
     // Build lead params from the collected slots.
-    const { direction, transactionType, params } = leadFlowEngine.buildLeadParams(flow.intent, flow.slots);
+    const { direction, transactionType, params } = leadFlowEngine.buildLeadParams(
+      flow.intent, flow.slots, flow.otherTexts || {}
+    );
 
     // Enrich location canonical (controller boundary keeps the engine pure).
     if (params.locationRaw) {
@@ -373,7 +408,7 @@ exports.confirmLead = async (req, res) => {
       params.locationCanonical = norm.canonical;
     }
 
-    const summary = leadFlowEngine.buildSummary(flow.intent, flow.slots);
+    const summary = leadFlowEngine.buildSummary(flow.intent, flow.slots, flow.otherTexts || {});
 
     // 1) Persist the lead (never lose data — created before matching).
     let lead;
@@ -425,21 +460,90 @@ exports.confirmLead = async (req, res) => {
     }
 
     // 4) Post results message with match cards.
-    const matchCards = matches.map((m) => ({
-      projectId: m.project._id,
-      projectName: m.project.projectName,
-      city: m.project.city,
-      location: m.project.location,
-      score: m.score,
-      slug: m.project.slug
-    }));
-    const resultsContent = phrasings.pickResults(matches.length);
+    //    Enriched to render the rich project card (cover image, builder identity,
+    //    verified badge, rating, price/BHK/status/RERA) — same look as the group
+    //    chat project announcement card, plus the match score.
+    const matchCards = matches.map((m) => {
+      const p = m.project;
+      const owner = p.owner || {};
+      const verifiedBuilder = owner.verificationStatus?.builder === 'verified';
+      return {
+        projectId: p._id,
+        projectName: p.projectName,
+        city: p.city,
+        location: p.location,
+        score: m.score,
+        matchedOn: m.matchedOn || [],
+        slug: p.slug,
+        // Rich card fields
+        coverImageUrl: p.media?.coverImage?.url || '',
+        startingPrice: p.pricing?.startingPrice || 0,
+        bhkOptions: p.configuration?.bhkOptions || [],
+        projectStatus: p.projectStatus || '',
+        reraNumber: p.reraNumber || '',
+        bankLoanAvailable: !!p.pricing?.bankLoanAvailable,
+        builderName: owner.name || '',
+        builderCompany: owner.companyName || '',
+        isVerifiedBuilder: !!verifiedBuilder,
+        builderRating: owner.rating || 0
+      };
+    });
+    // 4b) ALSO match against inventory captured through the SELL flow.
+    //     Published Projects are only half the supply — properties posted via the
+    //     AI "sell" conversation live as ExtractedLeads (intent: 'inventory'), and
+    //     nothing here used to look at them. A buyer therefore never saw stock
+    //     that another user had listed through the chat.
+    let inventoryCards = [];
+    try {
+      const isRequirement = direction === 'buy';
+      const cross = isRequirement
+        ? await crossMatchService.matchRequirementToInventory(lead, req.app.get('io'))
+        : await crossMatchService.matchInventoryToRequirements(lead, req.app.get('io'));
+
+      inventoryCards = (cross || []).map((c) => {
+        const p = c.lead.params || {};
+        const by = c.lead.extractedBy || {};
+        return {
+          leadId: c.lead._id,
+          source: 'lead',              // lets the client label it "Posted by agent"
+          kind: isRequirement ? 'inventory' : 'requirement',
+          projectName: [p.bhkType, p.propertyType].filter(Boolean).join(' ') || 'Property',
+          city: p.city || '',
+          location: p.location || p.locationRaw || '',
+          score: c.score.total,
+          matchedOn: c.score.matchedOn || [],
+          startingPrice: p.expectedPrice != null ? p.expectedPrice * 100000 : 0,
+          bhkOptions: p.bhkType ? [p.bhkType] : [],
+          area: p.area || null,
+          areaUnit: p.areaUnit || null,
+          projectStatus: p.projectStatus || p.possessionNeeded || '',
+          bankLoanAvailable: !!p.bankLoanAvailable,
+          builderName: by.name || '',
+          postedByRole: by.role || '',
+          coverImageUrl: ''
+        };
+      });
+    } catch (crossErr) {
+      logger.warn('Cross-match (chat confirm) failed (non-fatal)', { error: crossErr.message });
+    }
+
+    const totalFound = matches.length + inventoryCards.length;
+    const resultsContent = phrasings.pickResults(totalFound);
     const resultsMsg = await ChatMessage.create({
       session: session._id,
       sender: assistantId,
       content: resultsContent,
       messageType: 'system',
-      template: { inputType: 'results', options: { leadId: lead._id, matches: matchCards } },
+      template: {
+        inputType: 'results',
+        options: {
+          leadId: lead._id,
+          matches: matchCards,
+          // Kept in a separate list so existing clients that only read `matches`
+          // keep working unchanged.
+          inventoryMatches: inventoryCards
+        }
+      },
       readBy: [assistantId]
     });
 
@@ -469,12 +573,16 @@ exports.confirmLead = async (req, res) => {
     flow.status = 'completed';
     flow.currentSlotId = null;
     flow.editingSlotId = null;
+    // Remember what we created so a repeat confirm is a no-op (see guard above).
+    flow.leadId = lead._id;
+    flow.lastMatchCount = matches.length;
     session.markModified('leadFlowState');
     await session.save();
 
     return res.status(201).json({
       leadId: lead._id,
       matchCount: matches.length,
+      inventoryMatchCount: inventoryCards.length,
       resultsMessage: resultsMsg,
       // Kept in the response shape (null) so older clients that read it don't break.
       closingMessage: null,

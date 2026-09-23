@@ -127,6 +127,12 @@ class ProjectController {
 
   async update(req, res) {
     try {
+      // Snapshot buyer-facing fields BEFORE the update so we can detect whether
+      // the edit is significant enough to announce (price/status/config/media).
+      const beforeSnapshot = await Project.findById(req.params.projectId)
+        .select('pricing.startingPrice projectStatus configuration.bhkOptions media.galleryImages media.coverImage')
+        .lean();
+
       const project = await ProjectService.updateProject(req.params.projectId, req.body);
       if (!project) return res.status(404).json({ message: 'Project not found' });
 
@@ -138,6 +144,46 @@ class ProjectController {
 
       // Notify OneEmployee (fire-and-forget)
       notifyProjectUpdate(project.owner, project._id, 'updated', project.projectName);
+
+      // Fire-and-forget post-edit side effects. Fetch the full, owner-populated
+      // project once and reuse it for both the pin refresh and reverse matching.
+      {
+        const projectId = project.id || project._id;
+        const io = req.app.get('io');
+        Project.findById(projectId)
+          .populate('owner', 'name companyName role verificationStatus rating ratingCount')
+          .lean()
+          .then(async (fullProject) => {
+            if (!fullProject) return;
+
+            const {
+              refreshProjectSubGroupPin,
+              detectSignificantChanges,
+              postProjectAnnouncement
+            } = require('../services/UniversalGroupService');
+
+            // Always refresh the sub-group pinned message so it reflects the
+            // current project (price, type, plot size, BHK) instead of freezing
+            // at sub-group creation.
+            await refreshProjectSubGroupPin(fullProject, io).catch(() => {});
+
+            // Re-run reverse matching only for live inventory — draft edits
+            // shouldn't surface as matches.
+            if (fullProject.status === 'published') {
+              await reverseMatchService.onProjectPublished(fullProject, io);
+
+              // Announce an "Updated" card only for significant, buyer-facing
+              // changes on live projects — minor edits just refresh the pin.
+              const changes = detectSignificantChanges(beforeSnapshot, fullProject);
+              if (changes.length > 0) {
+                await postProjectAnnouncement(fullProject, 'updated', io, changes).catch(() => {});
+              }
+            }
+          })
+          .catch(err => {
+            console.error('Post-update side effects (non-blocking) error:', err.message);
+          });
+      }
 
       res.json(project);
     } catch (error) {
@@ -186,7 +232,7 @@ class ProjectController {
 
       // Fire-and-forget: run reverse matching against recent leads
       const fullProject = await Project.findById(project._id)
-        .populate('owner', 'name companyName role verificationStatus')
+        .populate('owner', 'name companyName role verificationStatus rating ratingCount')
         .lean();
       const io = req.app.get('io');
 
@@ -198,6 +244,15 @@ class ProjectController {
       reverseMatchService.onProjectPublished(fullProject, io).catch(err => {
         console.error('ReverseMatch (publish) non-blocking error:', err.message);
       });
+
+      // Fire-and-forget: post a persistent "New Project" announcement card into
+      // the HIT Community room so everyone sees the launch.
+      {
+        const { postProjectAnnouncement } = require('../services/UniversalGroupService');
+        postProjectAnnouncement(fullProject, 'new', io).catch(err => {
+          console.error('postProjectAnnouncement (publish) non-blocking error:', err.message);
+        });
+      }
 
       res.json(project);
     } catch (error) {

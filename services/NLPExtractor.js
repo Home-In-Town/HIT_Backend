@@ -685,7 +685,60 @@ class NLPExtractor {
       loanRequired: this._extractLoan(text),
       urgency: this._extractUrgency(text),
       city: this._extractCity(text),
+      ...this._extractArea(text),   // area (sqft-normalized) + areaUnit + areaRaw
     };
+  }
+
+  /**
+   * Extract a size/area from free text and normalize it to SQUARE FEET, which is
+   * the common unit projects store size in (plotSizeRange / carpetAreaRange).
+   *
+   * Handles: acre(s), guntha, sq ft / sqft / sft, sq yard / gaj / var,
+   * sq meter / sqm, and bare-number + unit combos ("5 acre", "1200 sqft",
+   * "3 guntha", "200 sq yd", "2.5 acres"). Returns:
+   *   { area: <number|null> (in sqft), areaUnit: 'sqft'|null, areaRaw: <string|null> }
+   *
+   * Only returns a value when an explicit AREA unit is present — we never treat a
+   * plain number as area (that would collide with budget/BHK).
+   */
+  _extractArea(text) {
+    const t = ` ${text.toLowerCase()} `;
+
+    // Conversion factors → square feet.
+    const TO_SQFT = {
+      acre: 43560,
+      guntha: 1089,
+      sqyd: 9,       // square yard / gaj / var
+      sqm: 10.7639,  // square metre
+      sqft: 1,
+    };
+
+    // Ordered patterns — most specific units first. Each captures the number.
+    const PATTERNS = [
+      // acres: "5 acre", "2.5 acres", "5acre"
+      [/(\d+(?:\.\d+)?)\s*(acres?|एकड़)\b/i, 'acre'],
+      // guntha: "3 guntha", "10 gunthe"
+      [/(\d+(?:\.\d+)?)\s*(gunthas?|gunthe|guntha)\b/i, 'guntha'],
+      // square yards / gaj / var: "200 sq yd", "150 gaj", "180 var"
+      [/(\d+(?:\.\d+)?)\s*(sq\.?\s*yards?|sq\.?\s*yd|sqyd|gaj|var)\b/i, 'sqyd'],
+      // square metres: "120 sqm", "120 sq m", "120 square meter"
+      [/(\d+(?:\.\d+)?)\s*(sq\.?\s*m(?:eters?|etres?)?|sqm)\b/i, 'sqm'],
+      // square feet: "1200 sq ft", "1200 sqft", "1200 sft", "1200 square feet"
+      [/(\d+(?:\.\d+)?)\s*(sq\.?\s*fe?e?t|sq\.?\s*ft|sqft|sft|square\s*feet)\b/i, 'sqft'],
+    ];
+
+    for (const [re, unit] of PATTERNS) {
+      const m = t.match(re);
+      if (m) {
+        const value = parseFloat(m[1]);
+        if (!isNaN(value) && value > 0) {
+          const sqft = Math.round(value * TO_SQFT[unit]);
+          return { area: sqft, areaUnit: 'sqft', areaRaw: m[0].trim() };
+        }
+      }
+    }
+
+    return { area: null, areaUnit: null, areaRaw: null };
   }
 
   _extractBhk(text) {
@@ -743,14 +796,18 @@ class NLPExtractor {
       if (match) {
         const value = this._parseBudgetValue(parseFloat(match[1]), match[2]);
         if (/upto|up\s*to|tak|maximum|max/i.test(match[0])) {
-          min = null;
+          // "upto 70L" — 70 is the ceiling. Anchor budget at the stated value so
+          // scoring treats it as the target, with the same value as the max.
+          min = value;
           max = value;
         } else if (/minimum|min|kam\s*se\s*kam|atleast/i.test(match[0])) {
           min = value;
           max = null;
         } else {
-          // "around" — create a ±10% range
-          min = Math.round(value * 0.9);
+          // "around 55L" — 55 is the target. Keep budget anchored at the stated
+          // value (NOT shifted down); express the tolerance via budgetMax so the
+          // ±10% band widens the DB net without moving the scoring anchor.
+          min = value;
           max = Math.round(value * 1.1);
         }
         flexible = true;
