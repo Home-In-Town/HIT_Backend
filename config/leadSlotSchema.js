@@ -194,7 +194,36 @@ const slots = [
     ]
   },
 
-  // ─── 4. Area ────────────────────────────────────────────────────────────
+  // ─── 4. City ──────────────────────────────────────────────────────────────
+  // Asked BEFORE the locality on purpose: once the city is known we can bias the
+  // locality autocomplete to that city, so typing "civil lines" resolves to the
+  // right one instead of a same-named locality in another state.
+  {
+    id: 'city',
+    inputType: 'city',            // place-autocomplete control (cities only)
+    required: true,
+    question: { en: 'Which city?', hi: 'Kaunsa sheher?' },
+    questionByIntent: {
+      sell: { en: 'Which city is the property in?', hi: 'Property kis sheher me hai?' },
+      buy: { en: 'Which city are you looking in?', hi: 'Kis sheher me dhoond rahe hain?' },
+      rent: { en: 'Which city?', hi: 'Kaunsa sheher?' }
+    }
+  },
+
+  // ─── 5. Locality / area ───────────────────────────────────────────────────
+  {
+    id: 'location',
+    inputType: 'location',        // place-autocomplete control (localities)
+    required: true,
+    question: { en: 'Which area / locality?', hi: 'Location / area batayein' },
+    questionByIntent: {
+      sell: { en: 'Which area / locality is the property in?', hi: 'Property kis area / locality me hai?' },
+      buy: { en: 'Which area / locality do you want?', hi: 'Aapko kaunsa area / locality chahiye?' },
+      rent: { en: 'Which area / locality?', hi: 'Kaunsa area / locality?' }
+    }
+  },
+
+  // ─── 6. Size ──────────────────────────────────────────────────────────────
   {
     id: 'area',
     inputType: 'number',
@@ -208,27 +237,6 @@ const slots = [
       buy: { en: 'What area (size) do you want?', hi: 'Kitna area chahiye?' },
       rent: { en: 'What is the area?', hi: 'Area kitna hai?' }
     }
-  },
-
-  // ─── 5. Location ──────────────────────────────────────────────────────────
-  {
-    id: 'location',
-    inputType: 'location',
-    required: true,
-    question: { en: 'Which area / locality?', hi: 'Location / area batayein' },
-    questionByIntent: {
-      sell: { en: 'Which area / locality is the property in?', hi: 'Property kis area / locality me hai?' },
-      buy: { en: 'Which area / locality do you want?', hi: 'Aapko kaunsa area / locality chahiye?' },
-      rent: { en: 'Which area / locality?', hi: 'Kaunsa area / locality?' }
-    }
-  },
-
-  // ─── 6. City ────────────────────────────────────────────────────────────
-  {
-    id: 'city',
-    inputType: 'text',
-    required: true,
-    question: { en: 'Which city?', hi: 'Kaunsa sheher?' }
   },
 
   // ═══════════════════════════════════════════════════════════════════════

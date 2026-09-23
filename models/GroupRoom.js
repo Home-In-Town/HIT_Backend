@@ -9,11 +9,23 @@ const groupRoomSchema = new mongoose.Schema({
     required: true,
     index: true
   },
-  // If project room, link to project
+  // If project room, link to project.
+  // Required whenever roomType === 'project' — a project room with no project
+  // link is meaningless and used to be schema-valid (see validate below).
   project: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Project',
-    default: null
+    default: null,
+    validate: {
+      validator: function (value) {
+        // `this` is the document on save; on update paths it may be the query,
+        // in which case we skip (runValidators handles the doc path).
+        if (!this || typeof this.get !== 'function') return true;
+        if (this.get('roomType') !== 'project') return true;
+        return value != null;
+      },
+      message: 'project is required when roomType is "project"'
+    }
   },
   // If area room, store area metadata
   area: {
@@ -53,5 +65,27 @@ groupRoomSchema.index({ 'area.city': 1, 'area.location': 1 });
 groupRoomSchema.index({ project: 1 });
 groupRoomSchema.index({ lastActivity: -1 });
 groupRoomSchema.index({ isUniversal: 1 }); // Quick lookup for the single universal room
+
+// ── One active group per project (enforced by the database) ──────────────────
+// The old code did findOne() then findOneAndUpdate({upsert:true}), which is a
+// check-then-act race. An upsert only serialises concurrent writers when a
+// unique index backs its filter, and there was none — so two simultaneous
+// matches on the same project could each insert a room.
+//
+// This partial unique index makes a duplicate physically impossible. It is
+// scoped to active project rooms so that (a) soft-deleted rooms don't block a
+// fresh one, and (b) area/universal rooms (project: null) are unaffected.
+//
+// NOTE: if duplicates already exist, this index build will fail until they are
+// merged. Run `node scripts/backfillProjectGroups.js` first — it merges
+// duplicates and then builds the index.
+groupRoomSchema.index(
+  { project: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { roomType: 'project', active: true },
+    name: 'uniq_active_project_room'
+  }
+);
 
 module.exports = mongoose.model('GroupRoom', groupRoomSchema);

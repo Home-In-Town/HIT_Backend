@@ -149,6 +149,22 @@ class LeadCaptureService {
         allLeads.push(lead);
         allMatches.push(...matches);
 
+        // Add the sender to each matched property's group — gated on THIS
+        // extraction's intent. This used to run after the loop against the
+        // pooled matches using bestExtraction.intent (the FIRST extraction's
+        // intent), so one leading inventory sentence suppressed sub-groups for
+        // every match in the message, and a leading requirement sentence
+        // wrongly created them for inventory matches.
+        if (matches.length > 0 && extraction.intent !== 'inventory') {
+          const { findOrCreateProjectSubGroup } = require('./UniversalGroupService');
+          for (const match of matches) {
+            if (!match.project) continue;
+            findOrCreateProjectSubGroup(match.project, senderId, io).catch(err => {
+              console.error('Sub-group creation failed (non-blocking):', err.message);
+            });
+          }
+        }
+
         // Cross-match: requirement ↔ inventory (lead-to-lead matching)
         if (extraction.intent === 'inventory') {
           // New inventory → find matching requirements
@@ -174,18 +190,8 @@ class LeadCaptureService {
         await this._notifyAdmins(io, sender, allLeads[0], allMatches.slice(0, 5));
       }
 
-      // Auto-create project sub-groups for requirement matches
-      if (allMatches.length > 0) {
-        const { findOrCreateProjectSubGroup } = require('./UniversalGroupService');
-        const intent = bestExtraction.intent;
-        for (const match of allMatches) {
-          if (match.project && intent !== 'inventory') {
-            findOrCreateProjectSubGroup(match.project, sender._id.toString(), io).catch(err => {
-              console.error('Sub-group creation failed (non-blocking):', err.message);
-            });
-          }
-        }
-      }
+      // (Project sub-groups are handled per-extraction inside the loop above,
+      // so each match is gated on the intent it actually came from.)
 
       const elapsed = Date.now() - startTime;
       logger.info(`Lead capture completed in ${elapsed}ms`, {

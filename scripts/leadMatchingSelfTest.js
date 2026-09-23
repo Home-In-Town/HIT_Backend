@@ -77,7 +77,14 @@ next = flow.nextSlot('buy', slots);
 check('flat → bhk asked', next.id === 'bhk', next.id);
 slots.bhk = '2BHK';
 next = flow.nextSlot('buy', slots);
-check('after bhk → area', next.id === 'area', next.id);
+// City is asked BEFORE locality/size so locality suggestions can be biased to it.
+check('after bhk → city', next.id === 'city', next.id);
+slots.city = 'Nagpur';
+next = flow.nextSlot('buy', slots);
+check('after city → location', next.id === 'location', next.id);
+slots.location = 'Civil Lines';
+next = flow.nextSlot('buy', slots);
+check('after location → area (size)', next.id === 'area', next.id);
 
 // Land must NOT ask bhk
 for (const landType of ['Residential Plots', 'Agricultural Land', 'Commercial / Industrial Land']) {
@@ -164,6 +171,50 @@ check('area carried', built.params.area === 1000, built.params.area);
 
 const crBuilt = flow.buildLeadParams('sell', { ...buyComplete, intent: 'sell', expectedPrice: { amount: 1.5, unit: 'cr' } });
 check('cr → 150 lakhs', crBuilt.params.budget === 150, crBuilt.params.budget);
+
+// ── Places autocomplete: resolved place objects accepted AND persisted ──
+const citySlot = flow.getSlot('city');
+const locSlot = flow.getSlot('location');
+check('city slot uses the place-autocomplete control', citySlot.inputType === 'city', citySlot.inputType);
+check('city accepts plain typed text', flow.parseAndValidate(citySlot, 'Nagpur', {}).valid === true);
+
+const cityPlace = {
+  text: 'Nagpur', placeId: 'ChIJ_city', formattedAddress: 'Nagpur, Maharashtra, India',
+  latitude: 21.1458, longitude: 79.0882, state: 'Maharashtra', postalCode: '',
+};
+const cityParsed = flow.parseAndValidate(citySlot, cityPlace, {});
+check('city accepts a resolved place object', cityParsed.valid === true);
+check('city keeps the placeId', cityParsed.value?.placeId === 'ChIJ_city', String(cityParsed.value?.placeId));
+check('city rejects an empty place object', flow.parseAndValidate(citySlot, {}, {}).valid === false);
+
+const locPlace = {
+  text: 'Civil Lines', placeId: 'ChIJ_loc', formattedAddress: 'Civil Lines, Nagpur, Maharashtra 440001, India',
+  latitude: 21.1539, longitude: 79.0821, state: 'Maharashtra', postalCode: '440001',
+};
+check('location accepts a resolved place object', flow.parseAndValidate(locSlot, locPlace, {}).valid === true);
+
+const placeBuilt = flow.buildLeadParams('buy', { ...buyComplete, city: cityPlace, location: locPlace });
+check('city stored as display text', placeBuilt.params.city === 'Nagpur', String(placeBuilt.params.city));
+check('location stored as display text', placeBuilt.params.location === 'Civil Lines', String(placeBuilt.params.location));
+check('placeId persisted', placeBuilt.params.placeId === 'ChIJ_loc', String(placeBuilt.params.placeId));
+check('formattedAddress persisted',
+  placeBuilt.params.formattedAddress === 'Civil Lines, Nagpur, Maharashtra 440001, India',
+  String(placeBuilt.params.formattedAddress));
+check('coordinates persisted (locality preferred over city)',
+  placeBuilt.params.latitude === 21.1539 && placeBuilt.params.longitude === 79.0821,
+  `${placeBuilt.params.latitude},${placeBuilt.params.longitude}`);
+check('state persisted', placeBuilt.params.state === 'Maharashtra', String(placeBuilt.params.state));
+check('postalCode persisted', placeBuilt.params.postalCode === '440001', String(placeBuilt.params.postalCode));
+
+// Locality typed manually → fall back to the city's coordinates.
+const mixedBuilt = flow.buildLeadParams('buy', { ...buyComplete, city: cityPlace, location: 'Somewhere' });
+check('falls back to city coordinates', mixedBuilt.params.latitude === 21.1458, String(mixedBuilt.params.latitude));
+
+// Plain-text answers must still work (no coordinates, no crash).
+const textBuilt = flow.buildLeadParams('buy', { ...buyComplete, city: 'Nagpur', location: 'Besa' });
+check('typed-only city/location still works',
+  textBuilt.params.city === 'Nagpur' && textBuilt.params.location === 'Besa' && textBuilt.params.latitude === null,
+  `${textBuilt.params.city}/${textBuilt.params.location}/${textBuilt.params.latitude}`);
 
 // Pruning: flat→land should drop bhk
 const pruned = flow.pruneInapplicable('buy', { ...buyComplete, propertyType: 'Residential Plots' });

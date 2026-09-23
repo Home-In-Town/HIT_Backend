@@ -73,6 +73,17 @@ const extractedLeadSchema = new mongoose.Schema({
     locationRaw: { type: String, default: null },    // original text
     locationCanonical: { type: String, default: null }, // normalized canonical key
     city: { type: String, default: null },
+
+    // ─── Verified location (Google Places) ───────────────────────────────────
+    // Populated when the user picks a suggestion instead of free-typing. The
+    // coordinates are what let a posted property render on the Project map and
+    // enable geo-proximity scoring in MatchEngineV2.
+    placeId: { type: String, default: null },
+    formattedAddress: { type: String, default: null },
+    latitude: { type: Number, default: null },
+    longitude: { type: Number, default: null },
+    state: { type: String, default: null },
+    postalCode: { type: String, default: null },
     propertyType: { type: String, default: null },   // flat, plot, villa, farm, farmhouse, shop, office, warehouse
     transactionType: { type: String, enum: ['buy', 'rent'], default: 'buy' }, // buy or rent/lease
     expectedPrice: { type: Number, default: null },   // seller's asking price (lakhs) — used for sell/rent listings

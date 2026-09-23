@@ -330,7 +330,23 @@ class LeadFlowEngine {
         return { valid: false, hint: 'Please enter a valid 10-digit mobile number.' };
       }
 
-      case 'location':
+      // City / locality accept EITHER plain text (typed manually) OR a resolved
+      // place object from the autocomplete control:
+      //   { text, placeId, latitude, longitude, formattedAddress, city, state, postalCode }
+      // Keeping the whole object lets buildLeadParams persist coordinates, which
+      // is what allows a posted property to appear on the Project map.
+      case 'city':
+      case 'location': {
+        if (raw && typeof raw === 'object') {
+          const text = String(raw.text || raw.name || raw.formattedAddress || '').trim();
+          if (!text) return { valid: false, hint: 'Please pick a place from the list, or type it.' };
+          return { valid: true, value: { ...raw, text } };
+        }
+        const text = String(raw || '').trim();
+        if (!text) return { valid: false, hint: 'This field cannot be empty.' };
+        return { valid: true, value: text };
+      }
+
       case 'text':
       default: {
         const text = String(raw || '').trim();
@@ -399,16 +415,34 @@ class LeadFlowEngine {
       return Array.isArray(a) ? a : [a];
     })();
 
+    // City / locality may be a resolved place object or plain text. Normalise to
+    // a display string plus (when available) the structured geo data.
+    const placeText = (v) => (v && typeof v === 'object' ? (v.text || '') : (v || null));
+    const locVal = val('location');
+    const cityVal = val('city');
+    const locPlace = locVal && typeof locVal === 'object' ? locVal : null;
+    const cityPlace = cityVal && typeof cityVal === 'object' ? cityVal : null;
+    // Prefer the locality's coordinates (more precise); fall back to the city's.
+    const geo = locPlace && locPlace.latitude != null ? locPlace : cityPlace;
+
     const params = {
       bhkType: val('bhk'),
       // For a sell/rent listing the "budget" concept is the asking price.
       budget: priceLakhs != null ? priceLakhs : null,
       budgetMax: null,
       expectedPrice: priceLakhs != null ? priceLakhs : null,
-      location: val('location'),
-      locationRaw: val('location'),
+      location: placeText(locVal),
+      locationRaw: placeText(locVal),
       locationCanonical: null, // controller fills via LocationNormalizer
-      city: val('city'),
+      city: placeText(cityVal),
+      // ── Structured location (from Places autocomplete) ──
+      // Stored so the lead carries a real, verified address + coordinates.
+      placeId: locPlace?.placeId || cityPlace?.placeId || null,
+      formattedAddress: locPlace?.formattedAddress || cityPlace?.formattedAddress || null,
+      latitude: geo?.latitude ?? null,
+      longitude: geo?.longitude ?? null,
+      state: locPlace?.state || cityPlace?.state || null,
+      postalCode: locPlace?.postalCode || cityPlace?.postalCode || null,
       category: val('category'),               // sell only
       propertyType,
       transactionType,

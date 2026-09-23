@@ -2,6 +2,35 @@ const ProjectService = require('../services/ProjectService');
 const User = require('../models/User');
 const Project = require('../models/Project');
 const reverseMatchService = require('../services/ReverseMatchService');
+const {
+  ensureProjectGroup,
+  syncProjectGroup,
+  deactivateProjectGroup
+} = require('../services/UniversalGroupService');
+
+/**
+ * Fire-and-forget group sync that still reports failures.
+ *
+ * Group creation used to happen only as a side effect of lead matching, with
+ * errors fully swallowed — so a project could silently end up with no group and
+ * nothing anywhere said so. It is still non-blocking (a group problem must never
+ * fail a project write), but every outcome is now logged.
+ */
+function syncGroupForProject(projectOrId, io, context) {
+  Promise.resolve()
+    .then(() => ensureProjectGroup(projectOrId, io))
+    .then((result) => {
+      if (!result) {
+        const id = projectOrId?._id || projectOrId?.id || projectOrId;
+        console.warn(`[ProjectGroup] ${context}: no group created for project ${id}`);
+      } else if (result.isNew) {
+        console.log(`[ProjectGroup] ${context}: created group ${result.room._id} for project ${result.project._id}`);
+      }
+    })
+    .catch((err) => {
+      console.error(`[ProjectGroup] ${context} failed:`, err.message);
+    });
+}
 
 /**
  * Fire-and-forget: Notify OneEmployee of project changes for linked users.
@@ -77,6 +106,10 @@ class ProjectController {
 
       const project = await ProjectService.createProject(projectData);
 
+      // Every property gets its group at birth, not when a lead happens to
+      // match it. Idempotent, so publish/update calling this again is harmless.
+      syncGroupForProject(project.id || project._id, req.app.get('io'), 'create');
+
       // Notify OneEmployee (fire-and-forget)
       notifyProjectUpdate(user?.id, project._id, 'created', project.projectName);
 
@@ -96,6 +129,12 @@ class ProjectController {
     try {
       const project = await ProjectService.updateProject(req.params.projectId, req.body);
       if (!project) return res.status(404).json({ message: 'Project not found' });
+
+      // Refresh the group's name and pinned property details so the group always
+      // reflects the latest data. Self-heals a missing group too.
+      Promise.resolve()
+        .then(() => syncProjectGroup(req.params.projectId, req.app.get('io')))
+        .catch((err) => console.error('[ProjectGroup] update sync failed:', err.message));
 
       // Notify OneEmployee (fire-and-forget)
       notifyProjectUpdate(project.owner, project._id, 'updated', project.projectName);
@@ -120,6 +159,16 @@ class ProjectController {
       const success = await ProjectService.deleteProject(req.params.projectId);
       if (!success) return res.status(404).json({ message: 'Project not found' });
 
+      // Cascade: close the property's group. The project row is hard-deleted, so
+      // without this the group survives as an orphan pointing at a dead project
+      // and keeps showing up in Discover. Awaited (it is a single updateMany) so
+      // there is no window where the group outlives the project, but never fatal.
+      try {
+        await deactivateProjectGroup(req.params.projectId, req.app.get('io'));
+      } catch (groupErr) {
+        console.error('[ProjectGroup] delete cascade failed:', groupErr.message);
+      }
+
       // Notify OneEmployee (fire-and-forget)
       if (projectBefore) {
           notifyProjectUpdate(projectBefore.owner, req.params.projectId, 'deleted', projectBefore.projectName);
@@ -140,6 +189,12 @@ class ProjectController {
         .populate('owner', 'name companyName role verificationStatus')
         .lean();
       const io = req.app.get('io');
+
+      // Publishing previously created no group at all — it only fired reverse
+      // matching, which notifies agents but never creates a group. This closes
+      // that gap for projects created before the create-time hook existed.
+      syncGroupForProject(fullProject, io, 'publish');
+
       reverseMatchService.onProjectPublished(fullProject, io).catch(err => {
         console.error('ReverseMatch (publish) non-blocking error:', err.message);
       });

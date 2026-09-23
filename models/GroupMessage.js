@@ -53,6 +53,12 @@ const groupMessageSchema = new mongoose.Schema({
     matchedOn: [String]       // which criteria matched: ['budget', 'area', 'bhk', 'loan']
   }],
 
+  // Marks THE single pinned property-details message of a project group.
+  // The details message is updated in place whenever the project changes, so
+  // the group always reflects the latest linked property without ever posting
+  // a second copy. Exactly one per room (see the partial unique index below).
+  isProjectDetails: { type: Boolean, default: false },
+
   deleted: { type: Boolean, default: false }
 }, {
   timestamps: true
@@ -61,5 +67,17 @@ const groupMessageSchema = new mongoose.Schema({
 groupMessageSchema.index({ room: 1, createdAt: -1 });
 groupMessageSchema.index({ 'requirementCard.area': 1 });
 groupMessageSchema.index({ messageType: 1, room: 1 });
+
+// Exactly one property-details message per room. Without this, a failed write
+// followed by a later call would re-post the details (the old code inferred
+// "is new" from the absence of any system message, which was fragile).
+groupMessageSchema.index(
+  { room: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { isProjectDetails: true },
+    name: 'uniq_project_details_per_room'
+  }
+);
 
 module.exports = mongoose.model('GroupMessage', groupMessageSchema);

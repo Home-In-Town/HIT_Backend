@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const GroupRoom = require('../models/GroupRoom');
 const GroupMessage = require('../models/GroupMessage');
 const DealRoom = require('../models/DealRoom');
@@ -6,6 +7,10 @@ const Notification = require('../models/Notification');
 const Project = require('../models/Project');
 const matchEngine = require('../services/MatchEngine');
 const leadCaptureService = require('../services/LeadCaptureService');
+const { ensureProjectGroup } = require('../services/UniversalGroupService');
+
+// Project fields needed to render a full property card on a group.
+const ROOM_PROJECT_FIELDS = 'projectName projectType category propertyType city location latitude longitude googleMapLink reraApproved reraNumber projectStatus pricing configuration amenities media slug status owner';
 
 // ═══════════════════════════════════════════════════════════
 // GROUP ROOMS
@@ -31,18 +36,53 @@ exports.createRoom = async (req, res) => {
       return res.status(400).json({ error: 'area.city and area.location are required for area rooms' });
     }
 
-    // Check if a room already exists for this project
+    // ── Project rooms ──────────────────────────────────────────────────────
+    // This endpoint used to accept ANY projectId with no existence check and no
+    // ownership check, making the caller admin of another builder's property
+    // group. Now the project must exist, the caller must be allowed to manage
+    // it, and creation is delegated to the single canonical code path so a
+    // manual create can never produce a second group for the same project.
     if (roomType === 'project') {
-      const existing = await GroupRoom.findOne({ project: projectId, active: true });
-      if (existing) {
-        return res.status(409).json({ error: 'Room already exists for this project', room: existing });
+      if (!mongoose.Types.ObjectId.isValid(String(projectId))) {
+        return res.status(400).json({ error: 'Invalid projectId' });
       }
+
+      const project = await Project.findById(projectId).select('owner coCaptains projectName').lean();
+      if (!project) {
+        return res.status(404).json({ error: 'Project not found' });
+      }
+
+      const ownerId = project.owner ? project.owner.toString() : '';
+      const coCaptainIds = (project.coCaptains || []).map(c => c.toString());
+      const isOwner = ownerId === userId.toString();
+      const isCoCaptain = coCaptainIds.includes(userId.toString());
+
+      if (!isOwner && !isCoCaptain && req.user.role !== 'admin') {
+        return res.status(403).json({ error: 'Only the project owner or an admin can create this property group' });
+      }
+
+      const existing = await GroupRoom.findOne({ project: projectId, roomType: 'project', active: true });
+      if (existing) {
+        await existing.populate('members.user', 'name role companyName');
+        await existing.populate('project', ROOM_PROJECT_FIELDS);
+        return res.status(409).json({ error: 'A group already exists for this property', room: existing });
+      }
+
+      const ensured = await ensureProjectGroup(projectId, req.app.get('io'));
+      if (!ensured) {
+        return res.status(500).json({ error: 'Could not create the property group' });
+      }
+
+      const room = ensured.room;
+      await room.populate('members.user', 'name role companyName');
+      await room.populate('project', ROOM_PROJECT_FIELDS);
+      return res.status(201).json({ room });
     }
 
     const room = await GroupRoom.create({
       name,
       roomType,
-      project: roomType === 'project' ? projectId : null,
+      project: null,
       area: roomType === 'area' ? area : undefined,
       createdBy: userId,
       description: description || '',
@@ -51,10 +91,19 @@ exports.createRoom = async (req, res) => {
     });
 
     await room.populate('members.user', 'name role companyName');
-    await room.populate('project', 'projectName city location slug media');
 
     res.status(201).json({ room });
   } catch (err) {
+    // Unique index on active project rooms — someone created it concurrently.
+    if (err?.code === 11000) {
+      const existing = await GroupRoom.findOne({ project: req.body.projectId, roomType: 'project', active: true })
+        .populate('members.user', 'name role companyName')
+        .populate('project', ROOM_PROJECT_FIELDS);
+      return res.status(409).json({ error: 'A group already exists for this property', room: existing });
+    }
+    if (err?.name === 'ValidationError') {
+      return res.status(400).json({ error: err.message });
+    }
     console.error('createRoom error:', err);
     res.status(500).json({ error: err.message });
   }
@@ -77,15 +126,18 @@ exports.getRooms = async (req, res) => {
       ...filter,
       'members.user': userId
     })
-      .populate('project', 'projectName city location slug media pricing configuration reraNumber projectStatus')
+      .populate('project', ROOM_PROJECT_FIELDS)
       .populate('members.user', 'name role companyName')
       .populate('createdBy', 'name')
       .sort({ lastActivity: -1 });
 
-    // Get discoverable rooms user hasn't joined
+    // ── Discoverable rooms ─────────────────────────────────────────────────
+    // Rooms the user has NOT joined. The membership filter already guarantees
+    // no overlap with myRooms, so a joined group can never appear twice.
     const discoverFilter = {
       ...filter,
-      'members.user': { $ne: userId }
+      'members.user': { $ne: userId },
+      isUniversal: { $ne: true } // everyone is auto-joined; never "discoverable"
     };
     if (search) {
       discoverFilter.$or = [
@@ -95,11 +147,21 @@ exports.getRooms = async (req, res) => {
       ];
     }
 
-    const discoverRooms = await GroupRoom.find(discoverFilter)
-      .populate('project', 'projectName city location slug media')
+    // Over-fetch, then drop property groups whose project is unpublished or
+    // missing. Projects now get a group at creation time, so without this a
+    // draft property's details would become publicly discoverable.
+    const discoverCandidates = await GroupRoom.find(discoverFilter)
+      .populate('project', ROOM_PROJECT_FIELDS)
       .populate('createdBy', 'name')
       .sort({ lastActivity: -1 })
-      .limit(20);
+      .limit(120);
+
+    const discoverRooms = discoverCandidates
+      .filter(room => {
+        if (room.roomType !== 'project') return true;
+        return !!room.project && room.project.status === 'published';
+      })
+      .slice(0, 50);
 
     res.status(200).json({ myRooms, discoverRooms });
   } catch (err) {
@@ -117,19 +179,36 @@ exports.joinRoom = async (req, res) => {
     const { roomId } = req.params;
     const userId = req.user._id;
 
+    if (!mongoose.Types.ObjectId.isValid(String(roomId))) {
+      return res.status(400).json({ error: 'Invalid roomId' });
+    }
+
     const room = await GroupRoom.findById(roomId);
     if (!room || !room.active) {
       return res.status(404).json({ error: 'Room not found' });
     }
 
-    // Check if already a member
-    const isMember = room.members.some(m => m.user.toString() === userId.toString());
-    if (isMember) {
-      return res.status(200).json({ message: 'Already a member', room });
-    }
+    // Atomic guarded push: the "not already a member" check is in the filter, so
+    // a double-tap on Join cannot add the same user twice.
+    const result = await GroupRoom.updateOne(
+      { _id: roomId, 'members.user': { $ne: userId } },
+      {
+        $push: { members: { user: userId, role: 'member', joinedAt: new Date() } },
+        $set: { lastActivity: new Date() }
+      }
+    );
+    const added = (result.modifiedCount ?? result.nModified ?? 0) > 0;
 
-    room.members.push({ user: userId, role: 'member' });
-    await room.save();
+    // Always return the room fully populated so the client can render the
+    // property card immediately after joining.
+    const fresh = await GroupRoom.findById(roomId)
+      .populate('project', ROOM_PROJECT_FIELDS)
+      .populate('members.user', 'name role companyName')
+      .populate('createdBy', 'name');
+
+    if (!added) {
+      return res.status(200).json({ message: 'Already a member', room: fresh });
+    }
 
     // Post system message
     await GroupMessage.create({
@@ -139,8 +218,7 @@ exports.joinRoom = async (req, res) => {
       content: `${req.user.name} joined the group`
     });
 
-    await room.populate('members.user', 'name role companyName');
-    res.status(200).json({ room });
+    res.status(200).json({ room: fresh });
   } catch (err) {
     console.error('joinRoom error:', err);
     res.status(500).json({ error: err.message });
