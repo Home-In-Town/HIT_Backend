@@ -231,7 +231,7 @@ exports.manualConnect = async (req, res) => {
             if (linkErr.status === 409) {
                 // Force link — user proved ownership via PIN
                 // Update Owner's salesProfileId + hitUserId directly
-                const INTERNAL_SECRET = process.env.INTERNAL_API_SECRET || 'hit-internal-secret-2024';
+                const INTERNAL_SECRET = process.env.INTERNAL_API_SECRET || '';
                 try {
                     await axios.post(`${LEADGEN_URL}/api/internal/identity/link`, {
                         ownerId,

@@ -40,7 +40,13 @@ const userSchema = new mongoose.Schema({
 
     // CRM Integration fields
     oneEmployeeLinked:  { type: Boolean, default: false },
-    oneEmployeeOwnerId: { type: String, sparse: true },
+    // No `sparse: true` here — `sparse` is an INDEX option, so declaring it on the
+    // path created a second index on this field alongside the explicit
+    // schema.index() below, which is what produced the
+    // "Duplicate schema index on {oneEmployeeOwnerId:1}" warning on every boot.
+    // The explicit one is kept because it carries the `unique` constraint the
+    // CRM link flow depends on (crmBridgeController upserts on this field).
+    oneEmployeeOwnerId: { type: String },
     verificationStatus: {
         builder: { type: String, enum: ['unverified', 'pending', 'verified'], default: 'unverified' },
         agent:   { type: String, enum: ['unverified', 'pending', 'verified'], default: 'unverified' }
@@ -57,7 +63,8 @@ const userSchema = new mongoose.Schema({
 
     // ── Referral / "Learn to Get Leads Faster" course ──
     referralCode: { type: String, unique: true, sparse: true, index: true }, // This user's own shareable code
-    referredBy:   { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null, index: true }, // Who referred this user
+    // index omitted: { referredBy: 1, createdAt: -1 } below covers it as a prefix.
+    referredBy:   { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null }, // Who referred this user
     referredAt:   { type: Date, default: null },   // When this user joined via a referral
     courseUnlocked: { type: Boolean, default: false }, // Lead-generation course access
 
@@ -71,12 +78,14 @@ const userSchema = new mongoose.Schema({
     timestamps: true
 });
 
-// Index for quick lookups
-userSchema.index({ role: 1 });
+// Index for quick lookups.
+// Note: { role: 1 } is intentionally absent — { role: 1, lastSeen: -1 } below
+// already serves role-only queries via its leading key, so a standalone index
+// would only add write cost.
 userSchema.index({ oldId: 1 });
 userSchema.index({ builderCode: 1 });
 userSchema.index({ oneEmployeeOwnerId: 1 }, { unique: true, sparse: true });
-userSchema.index({ role: 1, lastSeen: -1 }); // For builder network queries
+userSchema.index({ role: 1, lastSeen: -1 }); // also covers role-only lookups
 
 // Virtual: true when the builder verification is confirmed
 userSchema.virtual('isVerifiedBuilder').get(function () {

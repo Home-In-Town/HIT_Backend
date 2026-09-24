@@ -12,6 +12,42 @@ const ExtractedLead = require('../models/ExtractedLead');
  * All routes require authentication.
  */
 
+/**
+ * Can this user read/modify this lead?
+ *
+ * Mirrors the scoping the LIST endpoint already applies, so a lead that appears
+ * in a user's list is also openable by them. Previously the detail endpoint only
+ * allowed admin-or-self, which meant a captain could see a team member's lead in
+ * the list and then get 403 opening it.
+ *
+ * Tolerates `extractedBy` being an ObjectId, a populated doc, or missing — the
+ * old inline check did `lead.extractedBy._id.toString()`, which threw a
+ * TypeError (surfacing as a 500) whenever the ref was unset or dangling.
+ *
+ * @param {object} user - req.user
+ * @param {object} lead - lead document or lean object
+ */
+async function canAccessLead(user, lead) {
+  if (!user || !lead) return false;
+  if (user.role === 'admin') return true;
+
+  const by = lead.extractedBy;
+  const ownerId = by && typeof by === 'object' ? String(by._id || '') : String(by || '');
+  if (!ownerId) return false; // orphaned lead — admin only
+
+  const uid = String(user._id);
+  if (ownerId === uid) return true;
+
+  // Captains additionally cover their team, matching GET /leads.
+  if (user.role === 'captain') {
+    const User = require('../models/User');
+    const team = await User.find({ employerId: uid }).select('_id').lean();
+    return team.some((m) => String(m._id) === ownerId);
+  }
+
+  return false;
+}
+
 // ═══════════════════════════════════════════════════════════
 // DEBUG / TEST ENDPOINTS
 // ═══════════════════════════════════════════════════════════
@@ -238,12 +274,8 @@ router.get('/leads/:leadId', protect, async (req, res) => {
       return res.status(404).json({ error: 'Lead not found' });
     }
 
-    // Access check
-    const userRole = req.user.role;
-    if (userRole !== 'admin') {
-      if (lead.extractedBy._id.toString() !== req.user._id.toString()) {
-        return res.status(403).json({ error: 'Not authorized to view this lead' });
-      }
+    if (!(await canAccessLead(req.user, lead))) {
+      return res.status(403).json({ error: 'Not authorized to view this lead' });
     }
 
     return res.json({ lead });
@@ -271,6 +303,19 @@ router.patch('/leads/:leadId/status', protect, async (req, res) => {
     const update = { status };
     if (status === 'converted' && convertedTo) {
       update.convertedTo = convertedTo;
+    }
+
+    // Authorise BEFORE mutating. This endpoint previously had no ownership check
+    // at all, while the sibling GET did — so any authenticated user could mark
+    // another agent's lead rejected or converted.
+    const existing = await ExtractedLead.findById(req.params.leadId)
+      .select('extractedBy')
+      .lean();
+    if (!existing) {
+      return res.status(404).json({ error: 'Lead not found' });
+    }
+    if (!(await canAccessLead(req.user, existing))) {
+      return res.status(403).json({ error: 'Not authorized to modify this lead' });
     }
 
     const lead = await ExtractedLead.findByIdAndUpdate(

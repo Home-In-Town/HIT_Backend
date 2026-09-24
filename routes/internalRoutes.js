@@ -6,7 +6,15 @@ const reverseMatchService = require('../services/ReverseMatchService');
 // Middleware to verify internal secret
 const verifyInternalSecret = (req, res, next) => {
     const secret = req.headers['x-internal-secret'];
-    const configuredSecret = process.env.INTERNAL_API_SECRET || 'hit-internal-secret-2024';
+    const configuredSecret = process.env.INTERNAL_API_SECRET;
+
+    // Refuse rather than fall back to a repo-committed constant. This surface
+    // creates accounts and returns user PII, so "open by default when misconfigured"
+    // is not an acceptable failure mode. checkEnv warns about this at boot.
+    if (!configuredSecret) {
+        console.error('❌ INTERNAL_API_SECRET is not configured — refusing internal API request');
+        return res.status(503).json({ error: 'Internal API is not configured' });
+    }
 
     if (!secret || secret !== configuredSecret) {
         console.warn('⚠️ Unauthorized internal API access attempt');
@@ -542,7 +550,7 @@ router.post('/notify-project-update', async (req, res) => {
 
         // Send webhook to LeadGen Backend (non-blocking, best-effort)
         const LEADGEN_URL = process.env.LEADGEN_BACKEND_URL || 'https://lead-filteration-backend-624770114041.asia-south1.run.app';
-        const INTERNAL_SECRET = process.env.INTERNAL_API_SECRET || 'hit-internal-secret-2024';
+        const INTERNAL_SECRET = process.env.INTERNAL_API_SECRET || '';
 
         try {
             const axios = require('axios');

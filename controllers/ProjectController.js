@@ -1,7 +1,55 @@
+const mongoose = require('mongoose');
 const ProjectService = require('../services/ProjectService');
 const User = require('../models/User');
 const Project = require('../models/Project');
 const reverseMatchService = require('../services/ReverseMatchService');
+
+/**
+ * Fields a generic PUT /:projectId must never be allowed to set.
+ *
+ * ProjectRepository.update flattens the body straight into $set, so before this
+ * list existed a caller could pass `owner` and reassign someone else's project
+ * to themselves. Each of these has its own purpose-built, role-gated endpoint
+ * (assign-captain / assign-co-captain / assign-agent), so stripping them here
+ * removes the takeover vector without removing any capability.
+ */
+const IMMUTABLE_PROJECT_FIELDS = ['_id', 'id', 'owner', 'coCaptains', 'assignedAgent', 'createdAt', 'updatedAt'];
+
+/**
+ * Authorise a mutation against a specific project.
+ *
+ * Every /:projectId mutation sits behind `protect`, but until now none of them
+ * compared req.user to the project — so ANY authenticated account (including the
+ * default role handed out at signup) could edit or hard-delete ANY project.
+ *
+ * Admins always pass. Otherwise the caller must be the owner, a co-captain, or
+ * the assigned agent — mirroring the checks already used in
+ * organizationController and humanLeadController.
+ *
+ * @returns {{ project?: object, error?: { code: number, message: string } }}
+ */
+async function authorizeProjectAccess(req, projectId) {
+  if (!mongoose.Types.ObjectId.isValid(String(projectId))) {
+    return { error: { code: 400, message: 'Invalid project id' } };
+  }
+
+  const project = await Project.findById(projectId)
+    .select('owner coCaptains assignedAgent projectName status')
+    .lean();
+  if (!project) return { error: { code: 404, message: 'Project not found' } };
+
+  if (req.user?.role === 'admin') return { project };
+
+  const uid = String(req.user?._id || req.user?.id || '');
+  if (!uid) return { error: { code: 401, message: 'Not authenticated' } };
+
+  const isOwner = project.owner && String(project.owner) === uid;
+  const isCoCaptain = (project.coCaptains || []).some((c) => String(c) === uid);
+  const isAssignedAgent = project.assignedAgent && String(project.assignedAgent) === uid;
+
+  if (isOwner || isCoCaptain || isAssignedAgent) return { project };
+  return { error: { code: 403, message: 'You do not have permission to modify this project' } };
+}
 const {
   ensureProjectGroup,
   syncProjectGroup,
@@ -43,7 +91,7 @@ async function notifyProjectUpdate(userId, projectId, action, projectName) {
         if (!user || !user.oneEmployeeLinked || !user.oneEmployeeOwnerId) return;
 
         const LEADGEN_URL = process.env.LEADGEN_BACKEND_URL || 'https://lead-filteration-backend-624770114041.asia-south1.run.app';
-        const INTERNAL_SECRET = process.env.INTERNAL_API_SECRET || 'hit-internal-secret-2024';
+        const INTERNAL_SECRET = process.env.INTERNAL_API_SECRET || '';
         const axios = require('axios');
 
         await axios.post(`${LEADGEN_URL}/api/internal/project-sync`, {
@@ -127,13 +175,20 @@ class ProjectController {
 
   async update(req, res) {
     try {
+      const { error: authError } = await authorizeProjectAccess(req, req.params.projectId);
+      if (authError) return res.status(authError.code).json({ message: authError.message });
+
+      // Never let a generic update reassign ownership (see IMMUTABLE_PROJECT_FIELDS).
+      const updates = { ...req.body };
+      for (const field of IMMUTABLE_PROJECT_FIELDS) delete updates[field];
+
       // Snapshot buyer-facing fields BEFORE the update so we can detect whether
       // the edit is significant enough to announce (price/status/config/media).
       const beforeSnapshot = await Project.findById(req.params.projectId)
         .select('pricing.startingPrice projectStatus configuration.bhkOptions media.galleryImages media.coverImage')
         .lean();
 
-      const project = await ProjectService.updateProject(req.params.projectId, req.body);
+      const project = await ProjectService.updateProject(req.params.projectId, updates);
       if (!project) return res.status(404).json({ message: 'Project not found' });
 
       // Refresh the group's name and pinned property details so the group always
@@ -199,8 +254,11 @@ class ProjectController {
 
   async delete(req, res) {
     try {
-      // Get project before deleting (for notification)
-      const projectBefore = await Project.findById(req.params.projectId).select('owner projectName').lean();
+      // This is a HARD delete (ProjectRepository.delete → findByIdAndDelete), so
+      // the ownership check matters more here than anywhere else.
+      const { project: projectBefore, error: authError } =
+        await authorizeProjectAccess(req, req.params.projectId);
+      if (authError) return res.status(authError.code).json({ message: authError.message });
 
       const success = await ProjectService.deleteProject(req.params.projectId);
       if (!success) return res.status(404).json({ message: 'Project not found' });
@@ -228,6 +286,9 @@ class ProjectController {
 
   async publish(req, res) {
     try {
+      const { error: authError } = await authorizeProjectAccess(req, req.params.projectId);
+      if (authError) return res.status(authError.code).json({ message: authError.message });
+
       const project = await ProjectService.publishProject(req.params.projectId);
 
       // Fire-and-forget: run reverse matching against recent leads
@@ -303,7 +364,9 @@ class ProjectController {
         status: { $ne: 'deleted' }
       })
         .select('projectName slug _id coverImage city')
-        .sort('createdAt');
+        .sort('createdAt')
+        .limit(200)
+        .lean();
 
       res.status(200).json({
         builder: {
@@ -351,13 +414,17 @@ class ProjectController {
         return res.status(404).json({ message: 'User not found' });
       }
 
-      // 2. Find Projects owned by this user
+      // 2. Find Projects owned by this user.
+      // Public endpoint: bounded and lean so an owner with a large portfolio
+      // can't be used to pull unbounded full Mongoose documents.
       const projects = await Project.find({
         owner: user._id,
         status: { $ne: 'deleted' }
       })
         .select('projectName slug _id coverImage city startingPrice')
-        .sort('createdAt');
+        .sort('createdAt')
+        .limit(200)
+        .lean();
 
       res.status(200).json({
         builder: {
@@ -403,6 +470,9 @@ class ProjectController {
   async saveLandmarks(req, res) {
     try {
       const { projectId } = req.params;
+      const { error: authError } = await authorizeProjectAccess(req, projectId);
+      if (authError) return res.status(authError.code).json({ message: authError.message });
+
       let { landmarks } = req.body;
 
       // Parse if accidentally sent as a JSON string
@@ -433,6 +503,9 @@ class ProjectController {
   async saveLayoutEntities(req, res) {
     try {
       const { projectId } = req.params;
+      const { error: authError } = await authorizeProjectAccess(req, projectId);
+      if (authError) return res.status(authError.code).json({ message: authError.message });
+
       let { layoutEntities } = req.body;
 
       if (typeof layoutEntities === 'string') {
