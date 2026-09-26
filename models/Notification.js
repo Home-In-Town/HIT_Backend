@@ -20,6 +20,9 @@ const notificationSchema = new mongoose.Schema({
       'commission_update',     // Commission status changed
       'new_listing',           // New marketplace listing matching criteria
       'lead_match',            // Auto-detected lead from chat with matching projects
+      'property_match',        // A qualified CRM (HumanLead) requirement matched real inventory
+      'deal_interest',         // An agent registered interest in a builder's project
+      'deal_status_update',    // A deal room moved to a new status
       'system'                 // System notifications
     ],
     required: true
@@ -38,7 +41,19 @@ const notificationSchema = new mongoose.Schema({
   },
   // Reference to related entity
   reference: {
-    model: { type: String, enum: ['CrmLead', 'ChatSession', 'MarketplaceListing', 'MarketplaceAction', 'Project', 'ExtractedLead'] },
+    model: {
+      type: String,
+      enum: [
+        'CrmLead',
+        'ChatSession',
+        'MarketplaceListing',
+        'MarketplaceAction',
+        'Project',
+        'ExtractedLead',
+        'HumanLead',        // manually created + qualified CRM lead
+        'DealRoom'          // deal interest / deal status notifications
+      ]
+    },
     id: { type: mongoose.Schema.Types.ObjectId }
   },
   // Read status

@@ -19,4 +19,12 @@ router.put('/:id', ctrl.updateLead);
 router.put('/:id/stage', ctrl.updateStage);
 router.put('/:id/assign', ctrl.assignAgent);
 
+// Property matching for a qualified lead.
+// Matching runs automatically when a lead is moved to "Qualified" and again
+// whenever a new project is published (ReverseMatchService); these endpoints
+// cover reading the results and re-running on demand.
+router.get('/:id/matches', ctrl.getMatches);
+router.post('/:id/rematch', ctrl.rematchLead);
+router.put('/:id/matches/:matchId/dismiss', ctrl.dismissMatch);
+
 module.exports = router;

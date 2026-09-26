@@ -566,14 +566,21 @@ exports.showInterest = async (req, res) => {
       statusHistory: [{ from: null, to: 'initiated', changedBy: agentId }]
     });
 
-    // Notify builder
-    await Notification.create({
-      recipient: builderId,
-      type: 'deal_interest',
-      title: 'New Deal Interest!',
-      message: `${req.user.name} (Agent) is interested in ${project.projectName}`,
-      reference: { model: 'DealRoom', id: dealRoom._id }
-    });
+    // Notify builder.
+    // Non-fatal: the DealRoom + ChatSession are already persisted by this point,
+    // so a notification failure must not fail the request and leave the client
+    // thinking the deal wasn't created.
+    try {
+      await Notification.create({
+        recipient: builderId,
+        type: 'deal_interest',
+        title: 'New Deal Interest!',
+        message: `${req.user.name} (Agent) is interested in ${project.projectName}`,
+        reference: { model: 'DealRoom', id: dealRoom._id }
+      });
+    } catch (notifyErr) {
+      console.error('showInterest notification failed (non-fatal):', notifyErr.message);
+    }
 
     // Real-time notification to builder
     const io = req.app.get('io');
@@ -660,18 +667,24 @@ exports.updateDealStatus = async (req, res) => {
 
     await deal.save();
 
-    // Notify the other party
+    // Notify the other party.
+    // Non-fatal for the same reason as showInterest — the status change is
+    // already saved above.
     const recipientId = userId.toString() === deal.agent.toString()
       ? deal.builder
       : deal.agent;
 
-    await Notification.create({
-      recipient: recipientId,
-      type: 'deal_status_update',
-      title: 'Deal Status Updated',
-      message: `Deal moved from "${previousStatus}" to "${status}"`,
-      reference: { model: 'DealRoom', id: deal._id }
-    });
+    try {
+      await Notification.create({
+        recipient: recipientId,
+        type: 'deal_status_update',
+        title: 'Deal Status Updated',
+        message: `Deal moved from "${previousStatus}" to "${status}"`,
+        reference: { model: 'DealRoom', id: deal._id }
+      });
+    } catch (notifyErr) {
+      console.error('updateDealStatus notification failed (non-fatal):', notifyErr.message);
+    }
 
     const io = req.app.get('io');
     if (io) {

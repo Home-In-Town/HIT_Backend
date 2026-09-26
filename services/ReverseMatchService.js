@@ -1,25 +1,47 @@
 /**
  * ReverseMatchService
  * 
- * When a builder publishes a new project, this service:
- *   1. Queries recent ExtractedLeads (last 7 days) that could match the new inventory
- *   2. Scores each lead against the new project using MatchEngineV2's scoring logic
- *   3. Notifies the original agents who posted those requirements
- *   4. Notifies admins of the reverse matches
+ * When a builder publishes a new project, this service scores it against leads
+ * that already exist, so a requirement registered months ago is picked up
+ * automatically when matching inventory finally appears. It runs TWO
+ * independent passes:
+ *
+ *   Pass 1 — ExtractedLead (chat-captured leads)
+ *     1. Queries recent ExtractedLeads that could match the new inventory
+ *     2. Scores each lead against the new project using MatchEngineV2's scoring
+ *     3. Notifies the original agents who posted those requirements
+ *     4. Notifies admins of the reverse matches
+ *
+ *   Pass 2 — HumanLead (manually created + QUALIFIED CRM leads)
+ *     Scores qualified CRM leads against the new project and records every hit
+ *     in LeadPropertyMatch. This is what makes the CRM's "no match today,
+ *     matched automatically tomorrow" behaviour work — a qualified lead stays
+ *     in the pool indefinitely instead of needing to be re-run by hand.
+ *     Notification for this pass is intentionally not wired up yet; the pairs
+ *     are recorded (with per-recipient dedupe already in place) so it can be
+ *     added without reworking anything.
+ *
+ * The two passes are deliberately independent: an empty ExtractedLead pool must
+ * not stop CRM leads from being matched, which is why each pass owns its own
+ * early exits.
  * 
  * This closes the loop: agents don't have to re-post requirements every day.
  * If new inventory matches their existing need, they get alerted automatically.
  * 
  * Called from:
  *   - ProjectController.publish (main publish flow)
+ *   - ProjectController.update (when status becomes 'published')
  *   - internalRoutes (OneEmployee create/update with status='published')
  */
 
 const ExtractedLead = require('../models/ExtractedLead');
+const HumanLead = require('../models/HumanLead');
 const Notification = require('../models/Notification');
 const User = require('../models/User');
 const locationNormalizer = require('./LocationNormalizer');
 const propertyTypeNormalizer = require('./PropertyTypeNormalizer');
+const leadRequirementMapper = require('./LeadRequirementMapper');
+const humanLeadMatchService = require('./HumanLeadMatchService');
 const Logger = require('../utils/logger');
 
 const logger = new Logger('ReverseMatch');
@@ -28,6 +50,14 @@ const logger = new Logger('ReverseMatch');
 const LOOKBACK_DAYS = 180;
 // Minimum score to consider a reverse match valid
 const MIN_REVERSE_SCORE = 35;
+// Minimum score for a CRM (HumanLead) reverse match. Held to the SAME bar as
+// the forward CRM path (HumanLeadMatchService.MIN_MATCH_SCORE) rather than the
+// looser 35 above — otherwise a lead could acquire a 38-point match from a
+// publish that it would never have been given at qualification time, and the
+// two directions would disagree about what counts as a match.
+const MIN_HUMAN_LEAD_SCORE = humanLeadMatchService.MIN_MATCH_SCORE;
+// Max qualified CRM leads to score per publish (performance guard).
+const MAX_HUMAN_LEADS_TO_CHECK = 200;
 // Max leads to check per project publish (performance guard)
 const MAX_LEADS_TO_CHECK = 100;
 // Max matches to notify about (don't spam)
@@ -58,6 +88,31 @@ class ReverseMatchService {
         city: project.city
       });
 
+      // Pass 1 — chat-captured leads. Owns its own early exits.
+      await this._runExtractedLeadPass(project, io);
+
+      // Pass 2 — qualified CRM leads. Run unconditionally: pass 1 returning
+      // early (no chat leads in the pool) must not prevent CRM leads from being
+      // matched. Non-blocking in its own right.
+      await this._runHumanLeadPass(project);
+
+      logger.info(`Reverse match finished in ${Date.now() - startTime}ms`, {
+        projectId: project._id
+      });
+    } catch (err) {
+      logger.error('Reverse match error (non-blocking)', {
+        error: err.message,
+        projectId: project?._id
+      });
+    }
+  }
+
+  // ─── Pass 1: chat-captured ExtractedLeads (existing behaviour) ─────────────
+
+  async _runExtractedLeadPass(project, io) {
+    const startTime = Date.now();
+
+    try {
       // Step 1: Find recent leads that could match this project
       const candidateLeads = await this._findCandidateLeads(project);
 
@@ -106,18 +161,147 @@ class ReverseMatchService {
       await this._updateLeadsWithReverseMatch(validMatches, project);
 
       const elapsed = Date.now() - startTime;
-      logger.info(`Reverse match completed in ${elapsed}ms`, {
+      logger.info(`Reverse match (chat leads) completed in ${elapsed}ms`, {
         projectId: project._id,
         matchesFound: validMatches.length,
         leadsChecked: candidateLeads.length
       });
 
     } catch (err) {
-      logger.error('Reverse match error (non-blocking)', {
+      logger.error('Reverse match: chat-lead pass failed (non-blocking)', {
         error: err.message,
         projectId: project?._id
       });
     }
+  }
+
+  // ─── Pass 2: qualified CRM leads (HumanLead) ───────────────────────────────
+
+  /**
+   * Score this newly published project against every qualified CRM lead and
+   * record the hits.
+   *
+   * This is the half of the product requirement that says an unmatched
+   * qualified lead must "remain available for future matching when new
+   * properties are added" — the lead is never consumed, it simply sits in the
+   * pool with matchingEnabled: true and gets re-scored on each publish.
+   *
+   * Idempotency comes from LeadPropertyMatch's unique (leadModel, lead, project)
+   * index via humanLeadMatchService.recordMatches, so re-publishing or editing a
+   * project refreshes scores instead of duplicating matches.
+   *
+   * Notifications are deliberately not sent here yet. `recordMatches` reports
+   * which pairs were genuinely new, so that is the seam to build on.
+   */
+  async _runHumanLeadPass(project) {
+    const startTime = Date.now();
+
+    try {
+      const candidates = await this._findCandidateHumanLeads(project);
+
+      if (candidates.length === 0) {
+        logger.info('Reverse match: no qualified CRM leads to check', {
+          projectId: project._id
+        });
+        return { leadsChecked: 0, leadsMatched: 0, newPairs: 0 };
+      }
+
+      let leadsMatched = 0;
+      let newPairs = 0;
+
+      for (const lead of candidates) {
+        try {
+          // Reuse the exact scorer the chat path uses, fed with the CRM lead's
+          // requirements mapped into the same shape as ExtractedLead.params.
+          const requirement = leadRequirementMapper.toRequirement(lead);
+          const scored = this._calculateReverseScore(requirement, project);
+
+          if (scored.total < MIN_HUMAN_LEAD_SCORE) continue;
+
+          const recorded = await humanLeadMatchService.recordMatches(
+            lead._id,
+            [{
+              project,
+              score: scored.total,
+              confidence: scored.total / 100,
+              matchedOn: scored.matchedOn,
+              matchQuality: scored.total >= 70 ? 'exact' : 'close',
+            }],
+            'project_published'
+          );
+
+          leadsMatched++;
+          newPairs += recorded.newPairs.length;
+
+          // Keep the lead's denormalised badge counts honest.
+          await humanLeadMatchService.refreshLeadMatchSummary(lead._id);
+        } catch (err) {
+          // One bad lead must never abort the pass or the publish.
+          logger.error('Reverse match: CRM lead scoring failed (non-blocking)', {
+            leadId: String(lead._id),
+            projectId: String(project._id),
+            error: err.message
+          });
+        }
+      }
+
+      logger.info(`Reverse match (CRM leads) completed in ${Date.now() - startTime}ms`, {
+        projectId: project._id,
+        leadsChecked: candidates.length,
+        leadsMatched,
+        newPairs
+      });
+
+      return { leadsChecked: candidates.length, leadsMatched, newPairs };
+    } catch (err) {
+      logger.error('Reverse match: CRM-lead pass failed (non-blocking)', {
+        error: err.message,
+        projectId: project?._id
+      });
+      return { leadsChecked: 0, leadsMatched: 0, newPairs: 0 };
+    }
+  }
+
+  /**
+   * Find qualified CRM leads worth scoring against this project.
+   *
+   * Narrowing mirrors _findCandidateLeads: a city arm (including leads with no
+   * city recorded, which can still match on locality) and a recency window. The
+   * `matchingEnabled` flag is the gate — only leads an agent actually qualified
+   * are ever considered.
+   *
+   * Rent leads are excluded here rather than scored and thrown away, because
+   * Project carries no sale/rent distinction and a monthly rent scored against a
+   * sale price is meaningless.
+   */
+  async _findCandidateHumanLeads(project) {
+    const lookbackDate = new Date(Date.now() - LOOKBACK_DAYS * 24 * 60 * 60 * 1000);
+
+    const filter = {
+      matchingEnabled: true,
+      archived: false,
+      updatedAt: { $gte: lookbackDate },
+      // Not matchable against sale inventory — see the note above.
+      'requirements.transactionType': { $ne: 'rent' },
+    };
+
+    if (project.city) {
+      filter.$or = [
+        { 'requirements.city': { $regex: this._escapeRegex(project.city), $options: 'i' } },
+        { 'requirements.city': null },
+        { 'requirements.city': { $exists: false } },
+      ];
+    }
+
+    return HumanLead.find(filter)
+      .select('requirements budget homeType location assignedAgent owningCaptain createdBy name')
+      .sort({ updatedAt: -1 })
+      .limit(MAX_HUMAN_LEADS_TO_CHECK)
+      .lean();
+  }
+
+  _escapeRegex(str) {
+    return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
   // ─── Step 1: Find Candidate Leads ──────────────────────────────────────────

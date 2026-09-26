@@ -1,7 +1,15 @@
 const HumanLead = require('../models/HumanLead');
 const User = require('../models/User');
+const LeadPropertyMatch = require('../models/LeadPropertyMatch');
+const mapper = require('../services/LeadRequirementMapper');
+const humanLeadMatchService = require('../services/HumanLeadMatchService');
 
-// Fields the client may set when creating/updating a lead
+const QUALIFIED_STAGE = HumanLead.QUALIFIED_STAGE;
+
+// Fields the client may set when creating/updating a lead.
+// `requirements` is handled separately — it is normalised server-side rather
+// than copied through verbatim, because the engine is unit-sensitive and the
+// client must not be trusted to send lakhs/sqft correctly.
 const LEAD_FIELDS = [
   'name', 'phone', 'altPhone', 'email', 'budget', 'homeType',
   'buyingType', 'location', 'projectName', 'source', 'leadType',
@@ -83,6 +91,12 @@ exports.createLead = async (req, res) => {
       return res.status(400).json({ error: 'Name and phone are required' });
     }
 
+    // Structured requirements, normalised server-side (budget → lakhs,
+    // area → sqft, locality/city split, canonical location derived).
+    if (req.body.requirements && typeof req.body.requirements === 'object') {
+      data.requirements = mapper.normalizeRequirements(req.body.requirements);
+    }
+
     data.createdBy = req.user._id;
     data.owningCaptain = resolveOwningCaptain(req.user);
 
@@ -97,10 +111,33 @@ exports.createLead = async (req, res) => {
 
     data.stageHistory = [{ to: data.stage || 'New Lead', changedBy: req.user._id }];
 
-    let lead = await HumanLead.create(data);
-    lead = await HumanLead.findById(lead._id).populate(POPULATE);
+    // A lead can be created directly as Qualified. Treat that exactly like
+    // moving it to Qualified: validate the requirements, then match.
+    const createdQualified = data.stage === QUALIFIED_STAGE;
+    if (createdQualified) {
+      const check = mapper.isMatchable({ ...data });
+      if (!check.ok) {
+        return res.status(400).json({
+          error: 'INCOMPLETE_REQUIREMENTS',
+          message: 'Add the missing requirement details before qualifying this lead.',
+          missing: check.missing,
+        });
+      }
+      data.qualifiedAt = new Date();
+      data.qualifiedBy = req.user._id;
+      data.matchingEnabled = true;
+    }
 
-    return res.status(201).json({ lead });
+    let lead = await HumanLead.create(data);
+
+    let matching = null;
+    if (createdQualified) {
+      matching = await runMatching(lead, 'qualification');
+    }
+
+    lead = await HumanLead.findById(lead._id).populate(POPULATE).lean();
+
+    return res.status(201).json({ lead: shape(lead), matching });
   } catch (err) {
     console.error('createLead error:', err);
     return res.status(500).json({ error: err.message });
@@ -171,12 +208,49 @@ exports.updateStage = async (req, res) => {
     if (!canAccess(req.user, lead, partnerIds)) return res.status(403).json({ error: 'Not authorized' });
 
     const from = lead.stage;
+    const becomingQualified = stage === QUALIFIED_STAGE && from !== QUALIFIED_STAGE;
+
+    // Validate BEFORE mutating. Qualification is the gate that turns a lead into
+    // something the matching engine will act on, so it must not be possible to
+    // qualify a lead that cannot produce trustworthy matches.
+    if (becomingQualified) {
+      const check = mapper.isMatchable(lead);
+      if (!check.ok) {
+        return res.status(400).json({
+          error: 'INCOMPLETE_REQUIREMENTS',
+          message: 'Add the missing requirement details before qualifying this lead.',
+          missing: check.missing,
+        });
+      }
+    }
+
     lead.stage = stage;
     lead.stageHistory.push({ from, to: stage, changedBy: req.user._id });
+
+    if (becomingQualified) {
+      lead.qualifiedAt = new Date();
+      lead.qualifiedBy = req.user._id;
+      // Stays true from here on, so a project published months later still
+      // finds this lead via ReverseMatchService.
+      lead.matchingEnabled = true;
+      lead.matchingSkippedReason = null;
+    }
+
     await lead.save();
 
+    // Run matching inline for a qualification so the agent immediately sees the
+    // real matched properties in the response. Notification delivery is not
+    // built yet, so this response IS how the agent currently learns about a
+    // match — worth the extra latency on a deliberate action.
+    // matchQualifiedLead never throws, so it cannot fail the stage change (which
+    // is already persisted above).
+    let matching = null;
+    if (becomingQualified) {
+      matching = await runMatching(lead, 'qualification');
+    }
+
     const populated = await HumanLead.findById(lead._id).populate(POPULATE).lean();
-    return res.json({ lead: shape(populated) });
+    return res.json({ lead: shape(populated), matching });
   } catch (err) {
     console.error('updateStage error:', err);
     return res.status(500).json({ error: err.message });
@@ -197,10 +271,29 @@ exports.updateLead = async (req, res) => {
     for (const key of LEAD_FIELDS) {
       if (req.body[key] !== undefined && key !== 'stage') lead[key] = req.body[key];
     }
+
+    // Requirements are MERGED, not replaced, so a partial patch (e.g. only the
+    // budget) cannot silently wipe the rest of the requirement set.
+    let requirementsChanged = false;
+    if (req.body.requirements && typeof req.body.requirements === 'object') {
+      const existing = lead.requirements
+        ? (typeof lead.requirements.toObject === 'function' ? lead.requirements.toObject() : { ...lead.requirements })
+        : {};
+      lead.requirements = { ...existing, ...mapper.normalizeRequirements(req.body.requirements) };
+      requirementsChanged = true;
+    }
+
     await lead.save();
 
     const populated = await HumanLead.findById(lead._id).populate(POPULATE).lean();
-    return res.json({ lead: shape(populated) });
+
+    // Editing the requirements of an already-qualified lead leaves its existing
+    // matches stale. Matching is NOT re-run automatically here (that would make
+    // every keystroke-level save do engine work); the client is told to offer a
+    // rematch instead.
+    const rematchRecommended = requirementsChanged && !!populated.matchingEnabled;
+
+    return res.json({ lead: shape(populated), rematchRecommended });
   } catch (err) {
     console.error('updateLead error:', err);
     return res.status(500).json({ error: err.message });
@@ -304,7 +397,149 @@ exports.getTeamAgents = async (req, res) => {
   }
 };
 
+/**
+ * GET /api/human-leads/:id/matches
+ * Real matched properties for a lead, strongest first.
+ *
+ * Reads from LeadPropertyMatch (the authoritative Lead → Property relationship)
+ * and populates each project, so every field on the card is real data from the
+ * Projects collection — no mock values and nothing recomputed at read time.
+ */
+exports.getMatches = async (req, res) => {
+  try {
+    const lead = await HumanLead.findById(req.params.id).lean();
+    if (!lead) return res.status(404).json({ error: 'Lead not found' });
+
+    const partnerIds = await getPartnerIds(req.user);
+    if (!canAccess(req.user, lead, partnerIds)) {
+      return res.status(403).json({ error: 'Not authorized to view this lead' });
+    }
+
+    const matches = await humanLeadMatchService.getMatchesForLead(lead._id, {
+      includeDismissed: req.query.includeDismissed === 'true',
+    });
+
+    const check = mapper.isMatchable(lead);
+
+    return res.json({
+      matches,
+      total: matches.length,
+      // Context so the UI can explain an empty list instead of just showing
+      // "no matches": not qualified yet / rent / missing fields / genuinely none.
+      qualified: !!lead.qualifiedAt || lead.stage === QUALIFIED_STAGE,
+      matchingEnabled: !!lead.matchingEnabled,
+      matchingSkippedReason: lead.matchingSkippedReason || null,
+      lastMatchRunAt: lead.lastMatchRunAt || null,
+      requirementsComplete: check.ok,
+      requirementsMissing: check.missing,
+    });
+  } catch (err) {
+    console.error('getMatches error:', err);
+    return res.status(500).json({ error: err.message });
+  }
+};
+
+/**
+ * POST /api/human-leads/:id/rematch
+ * Re-run matching for an already-qualified lead (e.g. after editing its
+ * requirements). Safe to call repeatedly — LeadPropertyMatch's unique index
+ * makes re-runs refresh scores rather than create duplicates.
+ */
+exports.rematchLead = async (req, res) => {
+  try {
+    const lead = await HumanLead.findById(req.params.id);
+    if (!lead) return res.status(404).json({ error: 'Lead not found' });
+
+    const partnerIds = await getPartnerIds(req.user);
+    if (!canAccess(req.user, lead, partnerIds)) {
+      return res.status(403).json({ error: 'Not authorized' });
+    }
+
+    if (!lead.matchingEnabled) {
+      return res.status(400).json({
+        error: 'NOT_QUALIFIED',
+        message: `Move the lead to "${QUALIFIED_STAGE}" before matching properties.`,
+      });
+    }
+
+    const check = mapper.isMatchable(lead);
+    if (!check.ok) {
+      return res.status(400).json({
+        error: 'INCOMPLETE_REQUIREMENTS',
+        message: 'Add the missing requirement details to match properties.',
+        missing: check.missing,
+      });
+    }
+
+    const matching = await runMatching(lead, 'manual_rematch');
+
+    const populated = await HumanLead.findById(lead._id).populate(POPULATE).lean();
+    return res.json({ lead: shape(populated), matching });
+  } catch (err) {
+    console.error('rematchLead error:', err);
+    return res.status(500).json({ error: err.message });
+  }
+};
+
+/**
+ * PUT /api/human-leads/:id/matches/:matchId/dismiss
+ * Hide a match an agent judged irrelevant. The row is kept (not deleted) so
+ * re-scoring cannot silently resurrect it.
+ */
+exports.dismissMatch = async (req, res) => {
+  try {
+    const lead = await HumanLead.findById(req.params.id).lean();
+    if (!lead) return res.status(404).json({ error: 'Lead not found' });
+
+    const partnerIds = await getPartnerIds(req.user);
+    if (!canAccess(req.user, lead, partnerIds)) {
+      return res.status(403).json({ error: 'Not authorized' });
+    }
+
+    // Scoped by lead as well as matchId, so one lead's match can never be
+    // dismissed through another lead's URL.
+    const updated = await LeadPropertyMatch.findOneAndUpdate(
+      { _id: req.params.matchId, lead: lead._id, leadModel: 'HumanLead' },
+      { $set: { dismissed: true, dismissedBy: req.user._id, dismissedAt: new Date() } },
+      { new: true }
+    ).lean();
+
+    if (!updated) return res.status(404).json({ error: 'Match not found for this lead' });
+
+    const summary = await humanLeadMatchService.refreshLeadMatchSummary(lead._id);
+
+    return res.json({
+      dismissed: true,
+      matchId: String(updated._id),
+      matchCount: summary.matchCount,
+      bestMatchScore: summary.bestMatchScore,
+    });
+  } catch (err) {
+    console.error('dismissMatch error:', err);
+    return res.status(500).json({ error: err.message });
+  }
+};
+
 // ── Helpers ──
+
+/**
+ * Run property matching for a lead and shape the outcome for an API response.
+ *
+ * Never throws (HumanLeadMatchService swallows its own failures), so callers can
+ * await it without risking the request that triggered it.
+ */
+async function runMatching(lead, matchSource) {
+  const result = await humanLeadMatchService.matchQualifiedLead(lead, { matchSource });
+  return {
+    ran: result.ran,
+    skippedReason: result.skippedReason,
+    missing: result.missing,
+    matches: result.matches,
+    newCount: result.newCount,
+    total: result.total,
+    error: result.error,
+  };
+}
 
 // True if this user is allowed to see/act on a given lead.
 // `partnerIds` = caller's teamed-up captain ids (so partners can collaborate).
@@ -330,6 +565,11 @@ function canAccess(user, lead, partnerIds = []) {
 // Flatten a populated lead into the shape the frontend expects
 function shape(lead) {
   const person = (p) => (p && p._id ? { id: p._id.toString(), name: p.name, role: p.role } : null);
+
+  // Effective requirements + what's still missing, so the UI can show a
+  // "complete these to qualify" hint without duplicating the rules client-side.
+  const check = mapper.isMatchable(lead);
+
   return {
     id: lead._id.toString(),
     name: lead.name,
@@ -350,6 +590,22 @@ function shape(lead) {
     createdBy: person(lead.createdBy),
     owningCaptain: person(lead.owningCaptain),
     assignedAgent: person(lead.assignedAgent),
+
+    // ── Structured requirements (property matching) ──
+    requirements: lead.requirements || {},
+    requirementsComplete: check.ok,
+    requirementsMissing: check.missing,
+    // Which requirement values were inferred from the legacy free-text fields
+    // rather than entered structurally — lets the UI ask for confirmation.
+    requirementsDerivedFrom: check.derivedFrom,
+
+    // ── Qualification / matching state ──
+    qualifiedAt: lead.qualifiedAt || null,
+    matchingEnabled: !!lead.matchingEnabled,
+    matchingSkippedReason: lead.matchingSkippedReason || null,
+    lastMatchRunAt: lead.lastMatchRunAt || null,
+    matchCount: lead.matchCount || 0,
+    bestMatchScore: lead.bestMatchScore || 0,
   };
 }
 
