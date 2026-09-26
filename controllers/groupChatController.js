@@ -1,10 +1,14 @@
 const mongoose = require('mongoose');
+const crypto = require('crypto');
+const { PutObjectCommand } = require('@aws-sdk/client-s3');
+const { r2 } = require('../config/r2');
 const GroupRoom = require('../models/GroupRoom');
 const GroupMessage = require('../models/GroupMessage');
 const DealRoom = require('../models/DealRoom');
 const ChatSession = require('../models/ChatSession');
 const Notification = require('../models/Notification');
 const Project = require('../models/Project');
+const User = require('../models/User');
 const matchEngine = require('../services/MatchEngine');
 const leadCaptureService = require('../services/LeadCaptureService');
 const { ensureProjectGroup } = require('../services/UniversalGroupService');
@@ -235,28 +239,54 @@ exports.leaveRoom = async (req, res) => {
     const userId = req.user._id;
 
     const room = await GroupRoom.findById(roomId);
-    if (!room) return res.status(404).json({ error: 'Room not found' });
+    if (!room || !room.active) return res.status(404).json({ error: 'Active group not found' });
 
-    // Cannot leave the universal group
-    if (room.isUniversal || room.canLeave === false) {
-      return res.status(403).json({ error: 'You cannot leave this group' });
+    // Cannot leave the universal group.
+    if (room.isUniversal || room.roomType === 'universal' || room.canLeave === false) {
+      return res.status(403).json({ error: 'You cannot exit the universal group' });
     }
 
-    room.members = room.members.filter(m => m.user.toString() !== userId.toString());
-    await room.save();
+    const isMember = room.members.some(m => m.user.toString() === userId.toString());
+    if (!isMember) {
+      return res.status(403).json({ error: 'You are not a member of this group' });
+    }
 
-    // Post system message
+    // The room/property owner must close the group for everyone, not exit and
+    // leave an ownerless group behind. The mobile menu mirrors this rule:
+    // non-owner => Exit Group; owner => Delete Group.
+    const isOwner = room.createdBy?.toString() === userId.toString();
+    if (isOwner) {
+      return res.status(403).json({ error: 'The group owner cannot exit; delete the group instead' });
+    }
+
+    const result = await GroupRoom.updateOne(
+      { _id: roomId, active: true, 'members.user': userId },
+      { $pull: { members: { user: userId } }, $set: { lastActivity: new Date() } }
+    );
+    if ((result.modifiedCount ?? result.nModified ?? 0) === 0) {
+      return res.status(409).json({ error: 'Group membership already changed' });
+    }
+
     await GroupMessage.create({
       room: roomId,
       sender: userId,
       messageType: 'system',
-      content: `${req.user.name} left the group`
+      content: `${req.user.name} exited the group`
     });
 
-    res.status(200).json({ message: 'Left room successfully' });
+    const io = req.app.get('io');
+    if (io) {
+      io.to(`group_${roomId}`).emit('group_member_left', {
+        roomId,
+        userId: userId.toString(),
+        name: req.user.name,
+      });
+    }
+
+    return res.status(200).json({ message: 'Exited group successfully' });
   } catch (err) {
     console.error('leaveRoom error:', err);
-    res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: err.message });
   }
 };
 
@@ -274,47 +304,175 @@ exports.deleteRoom = async (req, res) => {
     const userRole = req.user.role;
 
     const room = await GroupRoom.findById(roomId);
-    if (!room) return res.status(404).json({ error: 'Room not found' });
+    if (!room) return res.status(404).json({ error: 'Group not found' });
+    if (!room.active) return res.status(409).json({ error: 'Group is already deleted' });
 
-    // Cannot delete the universal group
-    if (room.isUniversal) {
+    // Cannot delete the universal group, regardless of how it was created.
+    if (room.isUniversal || room.roomType === 'universal') {
       return res.status(403).json({ error: 'The universal group cannot be deleted' });
     }
 
-    // Only creator (project owner), room admin, or platform admin can delete
-    const isCreator = room.createdBy.toString() === userId.toString();
-    const isRoomAdmin = room.members.some(m => m.user.toString() === userId.toString() && m.role === 'admin');
+    // The property/area owner is the room creator. A platform admin retains an
+    // emergency override, but ordinary room admins cannot delete somebody
+    // else's property group.
+    const isOwner = room.createdBy?.toString() === userId.toString();
     const isPlatformAdmin = userRole === 'admin';
-
-    if (!isCreator && !isRoomAdmin && !isPlatformAdmin) {
-      return res.status(403).json({ error: 'Only the project owner or admin can delete this group' });
+    if (!isOwner && !isPlatformAdmin) {
+      return res.status(403).json({ error: 'Only the group owner can delete this group' });
     }
 
-    // Soft-delete: deactivate the room
-    room.active = false;
-    await room.save();
+    // Atomic active→inactive transition. This is the dedupe guard: two DELETEs
+    // racing each other cannot both create system/admin notifications.
+    const deletedRoom = await GroupRoom.findOneAndUpdate(
+      { _id: roomId, active: true },
+      { $set: { active: false, lastActivity: new Date() } },
+      { new: true }
+    ).lean();
+    if (!deletedRoom) {
+      return res.status(409).json({ error: 'Group is already deleted' });
+    }
 
-    // Post system message
+    const linkedProjectId = deletedRoom.project || null;
+    const subject = deletedRoom.roomType === 'project' ? 'Property group' : 'Group';
+
     await GroupMessage.create({
       room: roomId,
       sender: userId,
       messageType: 'system',
-      content: `Group closed by ${req.user.name} — property sold`
+      content: `${subject} deleted by ${req.user.name}`
     });
 
-    // Notify members via socket
     const io = req.app.get('io');
+
+    // Notify every active HUMAN platform admin. The system assistant also has
+    // role=admin, so it must be excluded explicitly. Notification failure is
+    // non-fatal because the group is already correctly deactivated.
+    try {
+      const admins = await User.find({
+        role: 'admin',
+        isActive: true,
+        isSystemAssistant: { $ne: true },
+      }).select('_id').lean();
+
+      if (admins.length > 0) {
+        const title = 'Group deleted';
+        const message = `"${deletedRoom.name}" was deleted by ${req.user.name}`;
+        await Notification.insertMany(admins.map(admin => ({
+          recipient: admin._id,
+          type: 'system',
+          title,
+          message,
+          reference: { model: 'GroupRoom', id: deletedRoom._id },
+        })));
+
+        if (io) {
+          for (const admin of admins) {
+            io.to(admin._id.toString()).emit('notification', {
+              type: 'system',
+              title,
+              message,
+              roomId: deletedRoom._id,
+              projectId: linkedProjectId,
+            });
+          }
+        }
+      }
+    } catch (notifyErr) {
+      console.error('deleteRoom admin notification failed (non-fatal):', notifyErr.message);
+    }
+
+    // Notify every member currently viewing the room so their UI closes it.
     if (io) {
       io.to(`group_${roomId}`).emit('group_deleted', {
         roomId,
-        message: `"${room.name}" has been closed — property sold`
+        message: `"${deletedRoom.name}" has been deleted by ${req.user.name}`,
       });
     }
 
-    res.status(200).json({ message: 'Group deleted successfully' });
+    return res.status(200).json({ message: 'Group deleted successfully' });
   } catch (err) {
     console.error('deleteRoom error:', err);
-    res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: err.message });
+  }
+};
+
+// ═══════════════════════════════════════════════════════════
+// GROUP ATTACHMENTS
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * POST /api/group-chat/rooms/:roomId/attachments
+ *
+ * Upload a chat attachment without mutating the linked Project. The previous
+ * mobile path reused `/files/proxy-upload`, which required a projectId and saved
+ * chat photos into Project.galleryImages (or replaced its brochure). That made
+ * universal/area uploads impossible and changed property media as a side
+ * effect of sending a chat message.
+ *
+ * This route is mounted after protect/restrictTo and verifies active room
+ * membership before putting bytes in R2.
+ */
+exports.uploadAttachment = async (req, res) => {
+  try {
+    const { roomId } = req.params;
+    const file = req.file;
+    const kind = req.body?.kind;
+
+    if (!mongoose.Types.ObjectId.isValid(String(roomId))) {
+      return res.status(400).json({ error: 'Invalid roomId' });
+    }
+
+    const room = await GroupRoom.findOne({
+      _id: roomId,
+      active: true,
+      'members.user': req.user._id,
+    }).select('_id').lean();
+    if (!room) {
+      return res.status(403).json({ error: 'Not an active member of this group' });
+    }
+
+    if (!file || !['image', 'file'].includes(kind)) {
+      return res.status(400).json({ error: 'File and kind (image/file) are required' });
+    }
+
+    const allowedImages = ['image/jpeg', 'image/png', 'image/webp'];
+    const allowedFiles = ['application/pdf'];
+    const allowed = kind === 'image' ? allowedImages : allowedFiles;
+    if (!allowed.includes(file.mimetype)) {
+      return res.status(400).json({
+        error: kind === 'image'
+          ? 'Only JPEG, PNG and WebP images are supported'
+          : 'Only PDF files are supported',
+      });
+    }
+
+    const safeName = String(file.originalname || `${kind}-${Date.now()}`)
+      .replace(/[^a-zA-Z0-9._-]/g, '-')
+      .replace(/-+/g, '-')
+      .slice(-180);
+    const fileKey = `groups/${roomId}/${kind}/${crypto.randomUUID()}-${safeName}`;
+
+    await r2.send(new PutObjectCommand({
+      Bucket: process.env.R2_BUCKET_NAME,
+      Key: fileKey,
+      Body: file.buffer,
+      ContentType: file.mimetype,
+    }));
+
+    const fileUrl = `${process.env.R2_PUBLIC_URL}/${fileKey}`;
+    return res.status(201).json({
+      fileUrl,
+      fileKey,
+      attachment: {
+        name: file.originalname || safeName,
+        mimeType: file.mimetype,
+        size: file.size,
+        key: fileKey,
+      },
+    });
+  } catch (err) {
+    console.error('uploadGroupAttachment error:', err);
+    return res.status(500).json({ error: 'Attachment upload failed', detail: err.message });
   }
 };
 
@@ -333,14 +491,14 @@ exports.getMessages = async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 50;
 
-    // Verify membership
-    const room = await GroupRoom.findOne({ _id: roomId, 'members.user': userId });
+    // Verify active membership
+    const room = await GroupRoom.findOne({ _id: roomId, active: true, 'members.user': userId });
     if (!room) {
       return res.status(403).json({ error: 'Not a member of this room' });
     }
 
     const messages = await GroupMessage.find({ room: roomId, deleted: false })
-      .populate('sender', 'name role companyName')
+      .populate('sender', 'name role companyName isVerified verificationStatus')
       .populate('inventoryCard.project', 'projectName slug media')
       .populate('matchResults.project', 'projectName city location pricing configuration owner slug media')
       .sort({ createdAt: -1 })
@@ -362,10 +520,11 @@ exports.postMessage = async (req, res) => {
   try {
     const { roomId } = req.params;
     const userId = req.user._id;
-    const { messageType, content, inventoryCard, requirementCard } = req.body;
+    const { messageType, content, inventoryCard, requirementCard, attachment } = req.body;
 
-    // Verify membership
-    const room = await GroupRoom.findOne({ _id: roomId, 'members.user': userId });
+    // Verify active membership. Soft-deleted rooms used to remain writable over
+    // REST even though the socket path correctly blocked them.
+    const room = await GroupRoom.findOne({ _id: roomId, active: true, 'members.user': userId });
     if (!room) {
       return res.status(403).json({ error: 'Not a member of this room' });
     }
@@ -382,6 +541,15 @@ exports.postMessage = async (req, res) => {
       messageType: messageType || 'text',
       content: content || ''
     };
+
+    if ((messageType === 'image' || messageType === 'file') && attachment) {
+      msgData.attachment = {
+        name: attachment.name,
+        mimeType: attachment.mimeType,
+        size: attachment.size,
+        key: attachment.key,
+      };
+    }
 
     // Builder posts inventory card
     if (messageType === 'inventory_card' && inventoryCard) {
@@ -423,7 +591,7 @@ exports.postMessage = async (req, res) => {
     await room.save();
 
     // Populate for response
-    await message.populate('sender', 'name role companyName');
+    await message.populate('sender', 'name role companyName isVerified verificationStatus');
     await message.populate('inventoryCard.project', 'projectName slug media');
     await message.populate('matchResults.project', 'projectName city location pricing configuration owner slug media');
 

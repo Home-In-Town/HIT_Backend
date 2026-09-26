@@ -51,7 +51,8 @@ const notificationSchema = new mongoose.Schema({
         'Project',
         'ExtractedLead',
         'HumanLead',        // manually created + qualified CRM lead
-        'DealRoom'          // deal interest / deal status notifications
+        'DealRoom',         // deal interest / deal status notifications
+        'GroupRoom'         // group deleted / lifecycle notifications
       ]
     },
     id: { type: mongoose.Schema.Types.ObjectId }

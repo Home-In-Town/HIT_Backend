@@ -203,14 +203,17 @@ router.post('/confirm', protect, async (req, res) => {
  */
 router.get('/leads', protect, async (req, res) => {
   try {
-    const { page = 1, limit = 20, status, minConfidence, source } = req.query;
+    const { page = 1, limit = 20, status, minConfidence, source, mineOnly } = req.query;
     const userId = req.user._id;
     const userRole = req.user.role;
 
     const filter = {};
 
-    // Role-based access
-    if (userRole === 'admin') {
+    // My Post needs a strict "created by me" view even for admins/captains,
+    // whose normal lead list intentionally includes all/team leads.
+    if (mineOnly === 'true') {
+      filter.extractedBy = userId;
+    } else if (userRole === 'admin') {
       // Admin sees everything
     } else if (userRole === 'captain') {
       // Captain sees their own + their team's leads

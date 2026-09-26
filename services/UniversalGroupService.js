@@ -708,7 +708,7 @@ async function postProjectAnnouncement(project, kind = 'new', io, changedFields 
     // Broadcast to open clients in the community room.
     if (io) {
       const populated = await GroupMessage.findById(message._id)
-        .populate('sender', 'name role companyName')
+        .populate('sender', 'name role companyName isVerified verificationStatus')
         .lean();
       const payload = { ...populated, roomId: room._id.toString() };
       // New card → append via the normal message event.

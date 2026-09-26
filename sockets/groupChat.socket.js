@@ -65,11 +65,11 @@ module.exports = (io) => {
 
     /**
      * Send a message in a group room (real-time path)
-     * Supports: text, inventory_card, requirement_card
+     * Supports: text, inventory_card, requirement_card, image, file
      */
     socket.on('group_send_message', async (data) => {
       try {
-        const { roomId, messageType, content, inventoryCard, requirementCard } = data;
+        const { roomId, messageType, content, inventoryCard, requirementCard, attachment } = data;
 
         if (!roomId) {
           socket.emit('error', { message: 'roomId is required' });
@@ -112,6 +112,14 @@ module.exports = (io) => {
         if (messageType === 'requirement_card' && requirementCard) {
           msgData.requirementCard = requirementCard;
         }
+        if ((messageType === 'image' || messageType === 'file') && attachment) {
+          msgData.attachment = {
+            name: attachment.name,
+            mimeType: attachment.mimeType,
+            size: attachment.size,
+            key: attachment.key,
+          };
+        }
 
         const message = await GroupMessage.create(msgData);
 
@@ -138,7 +146,7 @@ module.exports = (io) => {
         await room.save();
 
         // Populate for broadcast
-        await message.populate('sender', 'name role companyName');
+        await message.populate('sender', 'name role companyName isVerified verificationStatus');
         await message.populate('inventoryCard.project', 'projectName slug media');
         await message.populate('matchResults.project', 'projectName city location pricing configuration owner slug media');
 

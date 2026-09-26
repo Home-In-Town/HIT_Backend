@@ -15,22 +15,50 @@ const groupMessageSchema = new mongoose.Schema({
   // Message type determines how the message renders
   messageType: {
     type: String,
-    enum: ['text', 'inventory_card', 'requirement_card', 'system', 'project_announcement'],
+    enum: [
+      'text',
+      'inventory_card',
+      'requirement_card',
+      'system',
+      'project_announcement',
+      'image',
+      'file'
+    ],
     default: 'text'
   },
-  // Plain text content (for text/system messages)
+  // Plain text content (or the public R2 URL for image/file messages)
   content: { type: String, default: '', maxlength: 5000 },
+
+  // Original attachment metadata. Keeping the filename separately means the UI
+  // does not have to decode a UUID-prefixed R2 URL, and enables type/size checks
+  // without changing the simple URL-in-content contract used by old clients.
+  attachment: {
+    name: { type: String, maxlength: 255 },
+    mimeType: { type: String, maxlength: 120 },
+    size: { type: Number, min: 0 },
+    key: { type: String, maxlength: 1000 }
+  },
 
   // === Builder: Inventory Card ===
   inventoryCard: {
+    // Stable relationship to the real project. UI actions (details/chat/call)
+    // must use this id, never the active room's project or a name/location guess.
     project: { type: mongoose.Schema.Types.ObjectId, ref: 'Project' },
+    // Small display snapshot so historical cards remain useful even if a
+    // project is later edited. Every value originates from the real project or
+    // from the inventory form — no UI mock/fallback data.
+    projectName: { type: String },
+    propertyType: { type: String },
+    carpetAreaRange: { type: String },
     bhkOptions: [String],
     priceRange: { min: Number, max: Number },
-    area: { type: String },        // e.g., "Manish Nagar"
+    area: { type: String },        // locality, e.g. "Manish Nagar"
     city: { type: String },
     possessionStatus: { type: String },  // ready, 6months, 1year, 2year+
+    urgency: { type: String, enum: ['normal', 'urgent', 'very_urgent'], default: 'normal' },
     bankLoanAvailable: { type: Boolean, default: false },
     commissionPercent: { type: Number, default: 0 },
+    callNumber: { type: String },
     description: { type: String, default: '' }
   },
 
