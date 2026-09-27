@@ -16,6 +16,27 @@ const { ensureProjectGroup } = require('../services/UniversalGroupService');
 // Project fields needed to render a full property card on a group.
 const ROOM_PROJECT_FIELDS = 'projectName projectType category propertyType city location latitude longitude googleMapLink reraApproved reraNumber projectStatus pricing configuration amenities media slug status owner';
 
+// Roles allowed to put photos / PDFs into a group. Ordinary members can read
+// media but not publish it, so a group's media stays curated.
+const MEDIA_UPLOAD_ROLES = ['admin', 'captain'];
+
+// Sender fields sent to clients. `phone` is included so an inventory card can
+// offer a direct call to whoever posted the property.
+const MESSAGE_SENDER_FIELDS = 'name role companyName isVerified verificationStatus phone';
+
+/**
+ * Only inventory cards need the poster's phone number (the card's Call button
+ * dials it). Every other message type gets it stripped, so opening a group does
+ * not hand out the phone number of everyone who ever typed in it.
+ */
+function sanitizeMessage(doc) {
+  const obj = typeof doc?.toObject === 'function' ? doc.toObject() : doc;
+  if (obj?.sender && typeof obj.sender === 'object' && obj.messageType !== 'inventory_card') {
+    delete obj.sender.phone;
+  }
+  return obj;
+}
+
 // ═══════════════════════════════════════════════════════════
 // GROUP ROOMS
 // ═══════════════════════════════════════════════════════════
@@ -230,6 +251,71 @@ exports.joinRoom = async (req, res) => {
 };
 
 /**
+ * POST /api/group-chat/projects/:projectId/join
+ *
+ * Join (or simply open) the canonical group of a property. An inventory card in
+ * the universal room only carries a projectId — never a roomId — so the client
+ * has no room to join by id, and for older properties the group may not exist
+ * yet. Both cases are resolved here through the single canonical creation path.
+ */
+exports.joinProjectRoom = async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const userId = req.user._id;
+
+    if (!mongoose.Types.ObjectId.isValid(String(projectId))) {
+      return res.status(400).json({ error: 'Invalid projectId' });
+    }
+
+    const project = await Project.findById(projectId).select('_id').lean();
+    if (!project) {
+      return res.status(404).json({ error: 'Property not found' });
+    }
+
+    let room = await GroupRoom.findOne({ project: projectId, roomType: 'project', active: true });
+    if (!room) {
+      const ensured = await ensureProjectGroup(projectId, req.app.get('io'));
+      room = ensured?.room || null;
+    }
+    if (!room) {
+      return res.status(404).json({ error: 'No group exists for this property yet' });
+    }
+
+    const alreadyMember = room.members.some(m => m.user.toString() === userId.toString());
+
+    if (!alreadyMember) {
+      // Same atomic guarded push as joinRoom, so a double-tap cannot add the
+      // same member twice.
+      const result = await GroupRoom.updateOne(
+        { _id: room._id, 'members.user': { $ne: userId } },
+        {
+          $push: { members: { user: userId, role: 'member', joinedAt: new Date() } },
+          $set: { lastActivity: new Date() }
+        }
+      );
+      if ((result.modifiedCount ?? result.nModified ?? 0) > 0) {
+        await GroupMessage.create({
+          room: room._id,
+          sender: userId,
+          messageType: 'system',
+          content: `${req.user.name} joined the group`
+        });
+      }
+    }
+
+    const fresh = await GroupRoom.findById(room._id)
+      .populate('project', ROOM_PROJECT_FIELDS)
+      .populate('members.user', 'name role companyName')
+      .populate('createdBy', 'name');
+
+    return res.status(200).json({ room: fresh, joined: !alreadyMember });
+  } catch (err) {
+    console.error('joinProjectRoom error:', err);
+    return res.status(500).json({ error: err.message });
+  }
+};
+
+/**
  * POST /api/group-chat/rooms/:roomId/leave
  * Leave a group room (blocked for universal rooms)
  */
@@ -422,6 +508,12 @@ exports.uploadAttachment = async (req, res) => {
       return res.status(400).json({ error: 'Invalid roomId' });
     }
 
+    // Publishing media is restricted to admins and captains. Checked before the
+    // membership lookup and before any bytes reach R2.
+    if (!MEDIA_UPLOAD_ROLES.includes(req.user.role)) {
+      return res.status(403).json({ error: 'Only admins and captains can upload photos or files' });
+    }
+
     const room = await GroupRoom.findOne({
       _id: roomId,
       active: true,
@@ -498,14 +590,14 @@ exports.getMessages = async (req, res) => {
     }
 
     const messages = await GroupMessage.find({ room: roomId, deleted: false })
-      .populate('sender', 'name role companyName isVerified verificationStatus')
+      .populate('sender', MESSAGE_SENDER_FIELDS)
       .populate('inventoryCard.project', 'projectName slug media')
       .populate('matchResults.project', 'projectName city location pricing configuration owner slug media')
       .sort({ createdAt: -1 })
       .skip((page - 1) * limit)
       .limit(limit);
 
-    res.status(200).json({ messages: messages.reverse(), page, limit });
+    res.status(200).json({ messages: messages.reverse().map(sanitizeMessage), page, limit });
   } catch (err) {
     console.error('getMessages error:', err);
     res.status(500).json({ error: err.message });
@@ -542,13 +634,20 @@ exports.postMessage = async (req, res) => {
       content: content || ''
     };
 
-    if ((messageType === 'image' || messageType === 'file') && attachment) {
-      msgData.attachment = {
-        name: attachment.name,
-        mimeType: attachment.mimeType,
-        size: attachment.size,
-        key: attachment.key,
-      };
+    // Same rule as the upload endpoint: without this, a non-privileged member
+    // could skip /attachments and post a media message pointing at any URL.
+    if (messageType === 'image' || messageType === 'file') {
+      if (!MEDIA_UPLOAD_ROLES.includes(req.user.role)) {
+        return res.status(403).json({ error: 'Only admins and captains can share photos or files' });
+      }
+      if (attachment) {
+        msgData.attachment = {
+          name: attachment.name,
+          mimeType: attachment.mimeType,
+          size: attachment.size,
+          key: attachment.key,
+        };
+      }
     }
 
     // Builder posts inventory card
@@ -591,15 +690,17 @@ exports.postMessage = async (req, res) => {
     await room.save();
 
     // Populate for response
-    await message.populate('sender', 'name role companyName isVerified verificationStatus');
+    await message.populate('sender', MESSAGE_SENDER_FIELDS);
     await message.populate('inventoryCard.project', 'projectName slug media');
     await message.populate('matchResults.project', 'projectName city location pricing configuration owner slug media');
+
+    const payload = sanitizeMessage(message);
 
     // Broadcast via Socket.io to room members
     const io = req.app.get('io');
     if (io) {
       io.to(`group_${roomId}`).emit('group_message', {
-        ...message.toObject(),
+        ...payload,
         roomId
       });
 
@@ -653,7 +754,7 @@ exports.postMessage = async (req, res) => {
       });
     }
 
-    res.status(201).json({ message });
+    res.status(201).json({ message: payload });
   } catch (err) {
     console.error('postMessage error:', err);
     res.status(500).json({ error: err.message });

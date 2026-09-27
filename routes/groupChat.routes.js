@@ -19,6 +19,9 @@ router.use(restrictTo('admin', 'builder', 'agent', 'captain', 'employee'));
 router.post('/rooms', groupChatController.createRoom);
 router.get('/rooms', groupChatController.getRooms);
 router.post('/rooms/:roomId/join', groupChatController.joinRoom);
+// Join a property's group straight from an inventory card (card has a projectId,
+// not a roomId). Declared before '/rooms/...' params to keep the paths distinct.
+router.post('/projects/:projectId/join', groupChatController.joinProjectRoom);
 router.post('/rooms/:roomId/leave', groupChatController.leaveRoom);
 router.delete('/rooms/:roomId', groupChatController.deleteRoom);
 
