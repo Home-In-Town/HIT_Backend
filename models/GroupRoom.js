@@ -42,7 +42,12 @@ const groupRoomSchema = new mongoose.Schema({
   members: [{
     user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     role: { type: String, enum: ['admin', 'member'], default: 'member' },
-    joinedAt: { type: Date, default: Date.now }
+    joinedAt: { type: Date, default: Date.now },
+    // Last time this member opened the room, used for the unread badge.
+    // Deliberately nullable: members who joined before read tracking existed have
+    // no value, and unread then falls back to joinedAt. Defaulting this to "now"
+    // instead would silently mark every existing room as fully read.
+    lastReadAt: { type: Date, default: null }
   }],
   // Room description
   description: { type: String, default: '', maxlength: 500 },

@@ -37,6 +37,65 @@ function sanitizeMessage(doc) {
   return obj;
 }
 
+/**
+ * Unread message count per room for one user.
+ *
+ * Deliberately ONE aggregation for every room rather than a count per room: the
+ * room list routinely holds dozens of groups, and a per-room query would make
+ * opening the Groups tab an N+1.
+ *
+ * The cutoff for each room is that member's `lastReadAt`, falling back to their
+ * `joinedAt`. The fallback is what stops members who joined before read tracking
+ * existed from seeing a group's entire history as unread, and it also means a
+ * newly joined member never inherits messages sent before they arrived.
+ *
+ * System messages ("X joined the group") and the user's own messages never count.
+ *
+ * Exported for the test script — it is not a route handler.
+ *
+ * @param {ObjectId} userId
+ * @param {Array} rooms GroupRoom documents the user is a member of
+ * @returns {Promise<Map<string, number>>} roomId string → unread count
+ */
+async function computeUnreadCounts(userId, rooms) {
+  const counts = new Map();
+  if (!Array.isArray(rooms) || rooms.length === 0) return counts;
+
+  const conditions = [];
+  for (const room of rooms) {
+    const membership = (room.members || []).find(m => {
+      const memberId = m?.user?._id || m?.user;
+      return String(memberId) === String(userId);
+    });
+    // `createdAt` is the last resort for a room whose membership row somehow has
+    // neither marker; it keeps the count finite instead of unbounded.
+    const since = membership?.lastReadAt || membership?.joinedAt || room.createdAt;
+    if (!since) continue;
+    conditions.push({ room: room._id, createdAt: { $gt: since } });
+  }
+
+  // An empty $or is a Mongo error, so bail out before querying.
+  if (conditions.length === 0) return counts;
+
+  // Matches the { room: 1, createdAt: -1 } index on GroupMessage.
+  const rows = await GroupMessage.aggregate([
+    {
+      $match: {
+        deleted: false,
+        messageType: { $ne: 'system' },
+        sender: { $ne: userId },
+        $or: conditions
+      }
+    },
+    { $group: { _id: '$room', count: { $sum: 1 } } }
+  ]);
+
+  for (const row of rows) counts.set(String(row._id), row.count);
+  return counts;
+}
+
+exports.computeUnreadCounts = computeUnreadCounts;
+
 // ═══════════════════════════════════════════════════════════
 // GROUP ROOMS
 // ═══════════════════════════════════════════════════════════
@@ -188,7 +247,15 @@ exports.getRooms = async (req, res) => {
       })
       .slice(0, 50);
 
-    res.status(200).json({ myRooms, discoverRooms });
+    // Unread badge data. Only joined rooms can have unread messages, so the
+    // discover list is left untouched.
+    const unread = await computeUnreadCounts(userId, myRooms);
+    const myRoomsPayload = myRooms.map(room => ({
+      ...room.toObject(),
+      unreadCount: unread.get(String(room._id)) || 0
+    }));
+
+    res.status(200).json({ myRooms: myRoomsPayload, discoverRooms });
   } catch (err) {
     console.error('getRooms error:', err);
     res.status(500).json({ error: err.message });
@@ -311,6 +378,40 @@ exports.joinProjectRoom = async (req, res) => {
     return res.status(200).json({ room: fresh, joined: !alreadyMember });
   } catch (err) {
     console.error('joinProjectRoom error:', err);
+    return res.status(500).json({ error: err.message });
+  }
+};
+
+/**
+ * POST /api/group-chat/rooms/:roomId/read
+ *
+ * Marks the room read for the caller by stamping their membership row. The
+ * client calls this when a room is opened, which is what clears its unread badge.
+ */
+exports.markRoomRead = async (req, res) => {
+  try {
+    const { roomId } = req.params;
+    const userId = req.user._id;
+
+    if (!mongoose.Types.ObjectId.isValid(String(roomId))) {
+      return res.status(400).json({ error: 'Invalid roomId' });
+    }
+
+    // The positional operator updates only the caller's membership row, so this
+    // can never touch another member's read marker.
+    const result = await GroupRoom.updateOne(
+      { _id: roomId, active: true, 'members.user': userId },
+      { $set: { 'members.$.lastReadAt': new Date() } }
+    );
+
+    const matched = result.matchedCount ?? result.n ?? 0;
+    if (matched === 0) {
+      return res.status(403).json({ error: 'Not an active member of this group' });
+    }
+
+    return res.status(200).json({ message: 'Marked as read', unreadCount: 0 });
+  } catch (err) {
+    console.error('markRoomRead error:', err);
     return res.status(500).json({ error: err.message });
   }
 };

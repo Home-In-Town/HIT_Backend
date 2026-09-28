@@ -27,6 +27,8 @@ router.delete('/rooms/:roomId', groupChatController.deleteRoom);
 
 // ── Group Messages / Attachments ─────────────────────────
 router.post('/rooms/:roomId/attachments', attachmentUpload.single('file'), groupChatController.uploadAttachment);
+// Clears the caller's unread badge for this room.
+router.post('/rooms/:roomId/read', groupChatController.markRoomRead);
 router.get('/rooms/:roomId/messages', groupChatController.getMessages);
 router.post('/rooms/:roomId/messages', groupChatController.postMessage);
 
