@@ -96,6 +96,74 @@ async function computeUnreadCounts(userId, rooms) {
 
 exports.computeUnreadCounts = computeUnreadCounts;
 
+/**
+ * Project fields a match card needs, with the builder deep-populated.
+ *
+ * `owner` alone only yields an ObjectId — the match card shows the builder's
+ * NAME, so the nested populate is required, not cosmetic.
+ */
+const MATCH_PROJECT_POPULATE = {
+  path: 'matchResults.project',
+  select: 'projectName city location pricing configuration owner slug media',
+  populate: { path: 'owner', select: 'name companyName isVerified verificationStatus' }
+};
+
+/**
+ * Attaches each match's property GROUP to the message payload.
+ *
+ * A matching result advertises the property's group — its name, how many members
+ * it has and how recently it was active — because the card's primary action is
+ * "Join Group". Match results only carry the Project, so the group has to be
+ * looked up.
+ *
+ * Done in ONE query for every match across the whole page. A lookup per card
+ * would be an N+1 on a thread that can hold many requirement cards.
+ *
+ * Mutates and returns plain objects, so call it AFTER sanitizeMessage().
+ */
+async function attachMatchGroups(payload) {
+  const list = Array.isArray(payload) ? payload : [payload];
+
+  const projectIds = [];
+  for (const msg of list) {
+    for (const match of msg?.matchResults || []) {
+      const pid = match?.project?._id || match?.project;
+      if (pid) projectIds.push(pid);
+    }
+  }
+  if (projectIds.length === 0) return payload;
+
+  const rooms = await GroupRoom.find({
+    project: { $in: projectIds },
+    roomType: 'project',
+    active: true
+  }).select('_id name project members lastActivity').lean();
+
+  const byProject = new Map(rooms.map(room => [String(room.project), room]));
+
+  for (const msg of list) {
+    for (const match of msg?.matchResults || []) {
+      const pid = String(match?.project?._id || match?.project || '');
+      const room = byProject.get(pid);
+      // null (not undefined) so the client can tell "no group for this property"
+      // apart from "the server didn't send group data".
+      match.group = room
+        ? {
+          id: room._id,
+          name: room.name,
+          membersCount: (room.members || []).length,
+          lastActivity: room.lastActivity
+        }
+        : null;
+    }
+  }
+
+  return payload;
+}
+
+// Exported for the test script — not a route handler.
+exports.attachMatchGroups = attachMatchGroups;
+
 // ═══════════════════════════════════════════════════════════
 // GROUP ROOMS
 // ═══════════════════════════════════════════════════════════
@@ -693,12 +761,14 @@ exports.getMessages = async (req, res) => {
     const messages = await GroupMessage.find({ room: roomId, deleted: false })
       .populate('sender', MESSAGE_SENDER_FIELDS)
       .populate('inventoryCard.project', 'projectName slug media')
-      .populate('matchResults.project', 'projectName city location pricing configuration owner slug media')
+      .populate(MATCH_PROJECT_POPULATE)
       .sort({ createdAt: -1 })
       .skip((page - 1) * limit)
       .limit(limit);
 
-    res.status(200).json({ messages: messages.reverse().map(sanitizeMessage), page, limit });
+    const payload = await attachMatchGroups(messages.reverse().map(sanitizeMessage));
+
+    res.status(200).json({ messages: payload, page, limit });
   } catch (err) {
     console.error('getMessages error:', err);
     res.status(500).json({ error: err.message });
@@ -793,9 +863,9 @@ exports.postMessage = async (req, res) => {
     // Populate for response
     await message.populate('sender', MESSAGE_SENDER_FIELDS);
     await message.populate('inventoryCard.project', 'projectName slug media');
-    await message.populate('matchResults.project', 'projectName city location pricing configuration owner slug media');
+    await message.populate(MATCH_PROJECT_POPULATE);
 
-    const payload = sanitizeMessage(message);
+    const payload = await attachMatchGroups(sanitizeMessage(message));
 
     // Broadcast via Socket.io to room members
     const io = req.app.get('io');
