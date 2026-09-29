@@ -485,7 +485,11 @@ exports.confirmLead = async (req, res) => {
         builderName: owner.name || '',
         builderCompany: owner.companyName || '',
         isVerifiedBuilder: !!verifiedBuilder,
-        builderRating: owner.rating || 0
+        builderRating: owner.rating || 0,
+        // Lets the card offer WhatsApp / call directly. Falls back between the
+        // two, since builders often fill only one of them in.
+        whatsappNumber: p.cta?.whatsappNumber || p.cta?.callNumber || '',
+        callNumber: p.cta?.callNumber || p.cta?.whatsappNumber || ''
       };
     });
     // 4b) ALSO match against inventory captured through the SELL flow.

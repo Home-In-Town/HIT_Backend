@@ -75,7 +75,10 @@ class MatchEngine {
       // Fetch candidate projects
       const projects = await Project.find(query)
         .populate('owner', 'name companyName role verificationStatus')
-        .select('projectName projectType city location pricing configuration projectStatus owner media slug reraApproved')
+        // `cta` carries the builder's WhatsApp/call numbers, which match cards
+        // offer as a direct action. `reraNumber` was referenced by the card
+        // builder but never selected, so it always came back empty.
+        .select('projectName projectType city location pricing configuration projectStatus owner media slug reraApproved reraNumber cta')
         .limit(50) // Fetch more than needed for scoring
         .lean();
 
