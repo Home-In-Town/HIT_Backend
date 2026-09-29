@@ -403,6 +403,141 @@ async function syncProjectGroup(projectInput, io) {
   return await ensureProjectGroup(projectInput, io);
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// BUILDER GROUPS
+//
+// The company-level group. The Groups list shows builders rather than
+// individual properties, so each builder needs one room that lists their
+// properties and hosts the conversation with them.
+//
+// Created from the same project lifecycle that creates project groups: a
+// builder becomes visible the moment they have a property. Idempotent, like
+// ensureProjectGroup, so every entry point can call it freely.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Group name for a builder: the company, falling back to the person's name.
+ *
+ * A builder may register without a company and add one later, which is why
+ * ensureBuilderGroup re-syncs this on every call instead of snapshotting it.
+ */
+function builderGroupName(user) {
+  const company = (user?.companyName || '').trim();
+  if (company) return company.slice(0, 120);
+  const name = (user?.name || '').trim();
+  return (name || 'Builder').slice(0, 120);
+}
+
+/** Accept a user id or a user object; load the fields the group name needs. */
+async function resolveBuilder(input) {
+  if (!input) return null;
+
+  const rawId = input._id || input.id || input;
+  const id = rawId ? rawId.toString() : '';
+  if (!mongoose.Types.ObjectId.isValid(id)) return null;
+
+  const looksComplete = typeof input === 'object'
+    && input.name !== undefined
+    && input.companyName !== undefined
+    && input.role !== undefined;
+  if (looksComplete) return input;
+
+  return await User.findById(id).select('name companyName role isActive').lean();
+}
+
+/**
+ * Ensure a builder has exactly one active company-level group.
+ *
+ * @param {Object|string} builderInput - user document, lean object, or id
+ * @param {Object} io - socket.io instance (optional)
+ * @returns {Object|null} - { room, isNew, builder } or null if not creatable
+ */
+async function ensureBuilderGroup(builderInput, io) {
+  const builder = await resolveBuilder(builderInput);
+  if (!builder || !builder._id) return null;
+
+  const builderId = builder._id.toString();
+
+  // Only property-owning roles get a company group. An agent-owned project
+  // still produces a group, because in this product agents list inventory too —
+  // but a plain 'user' never should.
+  const allowedRoles = ['builder', 'agent', 'captain', 'admin'];
+  if (builder.role && !allowedRoles.includes(builder.role)) {
+    return null;
+  }
+
+  const name = builderGroupName(builder);
+  const description = `Official group for ${name}. Their properties, updates and deal discussions live here.`.slice(0, 500);
+
+  let room = await GroupRoom.findOne({ builder: builderId, roomType: 'builder', active: true });
+  let isNew = false;
+
+  if (!room) {
+    try {
+      // create() so validators run; the unique index serialises concurrent
+      // creators via E11000 (see the project group above).
+      room = await GroupRoom.create({
+        name,
+        roomType: 'builder',
+        builder: builderId,
+        project: null,
+        createdBy: builderId,
+        description,
+        members: [{ user: builderId, role: 'admin' }],
+        isUniversal: false,
+        canLeave: true,
+        isAutoCreated: true,
+        active: true,
+        lastActivity: new Date()
+      });
+      isNew = true;
+    } catch (err) {
+      if (err?.code === 11000) {
+        room = await GroupRoom.findOne({ builder: builderId, roomType: 'builder', active: true });
+      } else {
+        throw err;
+      }
+    }
+  }
+
+  if (!room) return null;
+
+  // Re-sync the name so adding or changing a company name is reflected.
+  const patch = {};
+  if (room.name !== name) patch.name = name;
+  if (room.description !== description) patch.description = description;
+  if (Object.keys(patch).length) {
+    await GroupRoom.updateOne({ _id: room._id }, { $set: patch });
+    Object.assign(room, patch);
+  }
+
+  if (isNew && io) {
+    io.to(builderId).emit('notification', {
+      type: 'builder_group_created',
+      title: 'Company Group Created',
+      message: `Your company group "${name}" is ready`,
+      roomId: room._id
+    });
+  }
+
+  return { room, isNew, builder };
+}
+
+/**
+ * Ensure the builder group for whoever owns this project. Called from the same
+ * project lifecycle hook as ensureProjectGroup, so a builder's group appears
+ * alongside their first property.
+ */
+async function ensureBuilderGroupForProject(projectInput, io) {
+  const project = await resolveProject(projectInput);
+  if (!project) return null;
+
+  const ownerId = project.owner?._id || project.owner;
+  if (!ownerId) return null;
+
+  return await ensureBuilderGroup(ownerId, io);
+}
+
 /**
  * Deactivate a project's group(s) when the project is deleted, so the group
  * stops surfacing in Discover as an orphan pointing at a dead project.
@@ -737,6 +872,9 @@ module.exports = {
   ensureProjectGroup,
   syncProjectGroup,
   deactivateProjectGroup,
+  ensureBuilderGroup,
+  ensureBuilderGroupForProject,
+  builderGroupName,
   buildProjectDetailsContent,
   projectGroupName,
   PROJECT_DETAIL_FIELDS,

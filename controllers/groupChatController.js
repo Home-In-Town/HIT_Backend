@@ -1,6 +1,6 @@
 const mongoose = require('mongoose');
 const crypto = require('crypto');
-const { PutObjectCommand } = require('@aws-sdk/client-s3');
+const { PutObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
 const { r2 } = require('../config/r2');
 const GroupRoom = require('../models/GroupRoom');
 const GroupMessage = require('../models/GroupMessage');
@@ -16,9 +16,57 @@ const { ensureProjectGroup } = require('../services/UniversalGroupService');
 // Project fields needed to render a full property card on a group.
 const ROOM_PROJECT_FIELDS = 'projectName projectType category propertyType city location latitude longitude googleMapLink reraApproved reraNumber projectStatus pricing configuration amenities media slug status owner';
 
-// Roles allowed to put photos / PDFs into a group. Ordinary members can read
+/**
+ * Room's project WITH the owner resolved.
+ *
+ * Selecting `owner` alone only yields an ObjectId, so the client had no company
+ * name to show — the Groups list is organised by company, so the nested populate
+ * is required, not cosmetic.
+ */
+const ROOM_PROJECT_POPULATE = {
+  path: 'project',
+  select: ROOM_PROJECT_FIELDS,
+  populate: { path: 'owner', select: 'name companyName role isVerified verificationStatus' }
+};
+
+// Builder rooms are company-level groups; the client shows the company name and
+// verification state on the row.
+const ROOM_BUILDER_FIELDS = 'name companyName role isVerified verificationStatus';
+
+// Roles allowed to put photos / PDFs into ANY group. Ordinary members can read
 // media but not publish it, so a group's media stays curated.
 const MEDIA_UPLOAD_ROLES = ['admin', 'captain'];
+
+/**
+ * May this user publish (or remove) media in this room?
+ *
+ * Admins and captains may do so anywhere. Beyond that, a builder owns the media
+ * in their OWN rooms — their company group and the groups of properties they
+ * own — because that is their showcase. Nobody else can publish media.
+ *
+ * @param {Object} room GroupRoom doc/lean with `builder` and `project.owner`
+ *                      available (populated or raw ids)
+ * @param {Object} user req.user
+ */
+function canPublishMedia(room, user) {
+  if (!room || !user) return false;
+  if (MEDIA_UPLOAD_ROLES.includes(user.role)) return true;
+
+  const userId = String(user._id);
+
+  // Their own company group.
+  const builderId = String(room.builder?._id || room.builder || '');
+  if (builderId && builderId === userId) return true;
+
+  // A property group for a property they own.
+  const ownerId = String(room.project?.owner?._id || room.project?.owner || '');
+  if (ownerId && ownerId === userId) return true;
+
+  return false;
+}
+
+// Exported for the test script — not a route handler.
+exports.canPublishMedia = canPublishMedia;
 
 // Sender fields sent to clients. `phone` is included so an inventory card can
 // offer a direct call to whoever posted the property.
@@ -216,7 +264,7 @@ exports.createRoom = async (req, res) => {
       const existing = await GroupRoom.findOne({ project: projectId, roomType: 'project', active: true });
       if (existing) {
         await existing.populate('members.user', 'name role companyName');
-        await existing.populate('project', ROOM_PROJECT_FIELDS);
+        await existing.populate(ROOM_PROJECT_POPULATE);
         return res.status(409).json({ error: 'A group already exists for this property', room: existing });
       }
 
@@ -227,7 +275,7 @@ exports.createRoom = async (req, res) => {
 
       const room = ensured.room;
       await room.populate('members.user', 'name role companyName');
-      await room.populate('project', ROOM_PROJECT_FIELDS);
+      await room.populate(ROOM_PROJECT_POPULATE);
       return res.status(201).json({ room });
     }
 
@@ -250,7 +298,7 @@ exports.createRoom = async (req, res) => {
     if (err?.code === 11000) {
       const existing = await GroupRoom.findOne({ project: req.body.projectId, roomType: 'project', active: true })
         .populate('members.user', 'name role companyName')
-        .populate('project', ROOM_PROJECT_FIELDS);
+        .populate(ROOM_PROJECT_POPULATE);
       return res.status(409).json({ error: 'A group already exists for this property', room: existing });
     }
     if (err?.name === 'ValidationError') {
@@ -278,7 +326,8 @@ exports.getRooms = async (req, res) => {
       ...filter,
       'members.user': userId
     })
-      .populate('project', ROOM_PROJECT_FIELDS)
+      .populate(ROOM_PROJECT_POPULATE)
+      .populate('builder', ROOM_BUILDER_FIELDS)
       .populate('members.user', 'name role companyName')
       .populate('createdBy', 'name')
       .sort({ lastActivity: -1 });
@@ -303,15 +352,38 @@ exports.getRooms = async (req, res) => {
     // missing. Projects now get a group at creation time, so without this a
     // draft property's details would become publicly discoverable.
     const discoverCandidates = await GroupRoom.find(discoverFilter)
-      .populate('project', ROOM_PROJECT_FIELDS)
+      .populate(ROOM_PROJECT_POPULATE)
+      .populate('builder', ROOM_BUILDER_FIELDS)
       .populate('createdBy', 'name')
       .sort({ lastActivity: -1 })
       .limit(120);
 
+    // Builder groups get the same treatment as property groups: a builder whose
+    // only properties are drafts must not become publicly discoverable. Resolved
+    // with ONE distinct() for every candidate rather than a check per room.
+    const builderCandidateIds = discoverCandidates
+      .filter(room => room.roomType === 'builder' && room.builder)
+      .map(room => room.builder._id || room.builder);
+
+    let publishedBuilderIds = new Set();
+    if (builderCandidateIds.length > 0) {
+      const ids = await Project.distinct('owner', {
+        owner: { $in: builderCandidateIds },
+        status: 'published'
+      });
+      publishedBuilderIds = new Set(ids.map(String));
+    }
+
     const discoverRooms = discoverCandidates
       .filter(room => {
-        if (room.roomType !== 'project') return true;
-        return !!room.project && room.project.status === 'published';
+        if (room.roomType === 'project') {
+          return !!room.project && room.project.status === 'published';
+        }
+        if (room.roomType === 'builder') {
+          const builderId = String(room.builder?._id || room.builder || '');
+          return !!builderId && publishedBuilderIds.has(builderId);
+        }
+        return true;
       })
       .slice(0, 50);
 
@@ -362,7 +434,8 @@ exports.joinRoom = async (req, res) => {
     // Always return the room fully populated so the client can render the
     // property card immediately after joining.
     const fresh = await GroupRoom.findById(roomId)
-      .populate('project', ROOM_PROJECT_FIELDS)
+      .populate(ROOM_PROJECT_POPULATE)
+      .populate('builder', ROOM_BUILDER_FIELDS)
       .populate('members.user', 'name role companyName')
       .populate('createdBy', 'name');
 
@@ -439,13 +512,96 @@ exports.joinProjectRoom = async (req, res) => {
     }
 
     const fresh = await GroupRoom.findById(room._id)
-      .populate('project', ROOM_PROJECT_FIELDS)
+      .populate(ROOM_PROJECT_POPULATE)
+      .populate('builder', ROOM_BUILDER_FIELDS)
       .populate('members.user', 'name role companyName')
       .populate('createdBy', 'name');
 
     return res.status(200).json({ room: fresh, joined: !alreadyMember });
   } catch (err) {
     console.error('joinProjectRoom error:', err);
+    return res.status(500).json({ error: err.message });
+  }
+};
+
+/**
+ * DELETE /api/group-chat/rooms/:roomId/messages/:messageId
+ *
+ * Removes a message from a group. `deleted` already existed on GroupMessage and
+ * getMessages already filters on it, but nothing could ever set it — so posted
+ * media was permanent. A builder needs to be able to take their own photos down.
+ *
+ * Allowed for: the sender of the message, an admin/captain, or the owner of the
+ * room (their company group / a property they own).
+ *
+ * Media messages also have their R2 object removed. Group attachments live under
+ * `groups/{roomId}/…` and are never referenced anywhere else, so deleting the
+ * object cannot break a project gallery or a share link. The DB write happens
+ * first: a failed R2 delete leaves an orphaned file, which is harmless, whereas
+ * the reverse would leave a message pointing at a missing image.
+ */
+exports.deleteMessage = async (req, res) => {
+  try {
+    const { roomId, messageId } = req.params;
+    const userId = req.user._id;
+
+    if (!mongoose.Types.ObjectId.isValid(String(roomId)) ||
+        !mongoose.Types.ObjectId.isValid(String(messageId))) {
+      return res.status(400).json({ error: 'Invalid roomId or messageId' });
+    }
+
+    const room = await GroupRoom.findOne({
+      _id: roomId,
+      active: true,
+      'members.user': userId,
+    }).select('_id builder project').populate('project', 'owner').lean();
+    if (!room) {
+      return res.status(403).json({ error: 'Not an active member of this group' });
+    }
+
+    const message = await GroupMessage.findOne({ _id: messageId, room: roomId });
+    if (!message || message.deleted) {
+      return res.status(404).json({ error: 'Message not found' });
+    }
+
+    // System messages are part of the room's history, not user content.
+    if (message.messageType === 'system') {
+      return res.status(403).json({ error: 'System messages cannot be deleted' });
+    }
+
+    const isSender = String(message.sender) === String(userId);
+    if (!isSender && !canPublishMedia(room, req.user)) {
+      return res.status(403).json({ error: 'You can only delete your own messages' });
+    }
+
+    message.deleted = true;
+    await message.save();
+
+    // Only group attachments are safe to remove from storage.
+    const key = message.attachment?.key;
+    if (key && String(key).startsWith(`groups/${roomId}/`)) {
+      try {
+        await r2.send(new DeleteObjectCommand({
+          Bucket: process.env.R2_BUCKET_NAME,
+          Key: key,
+        }));
+      } catch (storageErr) {
+        // Non-fatal: the message is already gone from the group.
+        console.error('deleteMessage: R2 cleanup failed:', storageErr.message);
+      }
+    }
+
+    const io = req.app.get('io');
+    if (io) {
+      io.to(`group_${roomId}`).emit('group_message_deleted', {
+        roomId,
+        messageId: String(message._id),
+      });
+    }
+
+    return res.status(200).json({ message: 'Message deleted', messageId: String(message._id) });
+  } catch (err) {
+    console.error('deleteMessage error:', err);
     return res.status(500).json({ error: err.message });
   }
 };
@@ -677,19 +833,22 @@ exports.uploadAttachment = async (req, res) => {
       return res.status(400).json({ error: 'Invalid roomId' });
     }
 
-    // Publishing media is restricted to admins and captains. Checked before the
-    // membership lookup and before any bytes reach R2.
-    if (!MEDIA_UPLOAD_ROLES.includes(req.user.role)) {
-      return res.status(403).json({ error: 'Only admins and captains can upload photos or files' });
-    }
-
+    // Membership first, then publish rights. The room has to be loaded before
+    // the rights check now, because a builder's permission depends on whether
+    // this is one of THEIR rooms. Both run before any bytes reach R2.
     const room = await GroupRoom.findOne({
       _id: roomId,
       active: true,
       'members.user': req.user._id,
-    }).select('_id').lean();
+    }).select('_id builder project').populate('project', 'owner').lean();
     if (!room) {
       return res.status(403).json({ error: 'Not an active member of this group' });
+    }
+
+    if (!canPublishMedia(room, req.user)) {
+      return res.status(403).json({
+        error: 'You can only upload photos or files in your own groups',
+      });
     }
 
     if (!file || !['image', 'file'].includes(kind)) {
@@ -787,7 +946,10 @@ exports.postMessage = async (req, res) => {
 
     // Verify active membership. Soft-deleted rooms used to remain writable over
     // REST even though the socket path correctly blocked them.
-    const room = await GroupRoom.findOne({ _id: roomId, active: true, 'members.user': userId });
+    // `project.owner` is populated because canPublishMedia() needs it to tell
+    // whether this is one of the caller's own property groups.
+    const room = await GroupRoom.findOne({ _id: roomId, active: true, 'members.user': userId })
+      .populate('project', 'owner');
     if (!room) {
       return res.status(403).json({ error: 'Not a member of this room' });
     }
@@ -808,8 +970,10 @@ exports.postMessage = async (req, res) => {
     // Same rule as the upload endpoint: without this, a non-privileged member
     // could skip /attachments and post a media message pointing at any URL.
     if (messageType === 'image' || messageType === 'file') {
-      if (!MEDIA_UPLOAD_ROLES.includes(req.user.role)) {
-        return res.status(403).json({ error: 'Only admins and captains can share photos or files' });
+      if (!canPublishMedia(room, req.user)) {
+        return res.status(403).json({
+          error: 'You can only share photos or files in your own groups',
+        });
       }
       if (attachment) {
         msgData.attachment = {

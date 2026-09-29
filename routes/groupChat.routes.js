@@ -31,6 +31,9 @@ router.post('/rooms/:roomId/attachments', attachmentUpload.single('file'), group
 router.post('/rooms/:roomId/read', groupChatController.markRoomRead);
 router.get('/rooms/:roomId/messages', groupChatController.getMessages);
 router.post('/rooms/:roomId/messages', groupChatController.postMessage);
+// Remove a message (own message, or any message in a group you own/admin).
+// Media messages also get their R2 object deleted.
+router.delete('/rooms/:roomId/messages/:messageId', groupChatController.deleteMessage);
 
 // ── Deal Rooms (Interested flow) ────────────────────────
 router.post('/interested', groupChatController.showInterest);

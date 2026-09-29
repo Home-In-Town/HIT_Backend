@@ -52,6 +52,7 @@ async function authorizeProjectAccess(req, projectId) {
 }
 const {
   ensureProjectGroup,
+  ensureBuilderGroupForProject,
   syncProjectGroup,
   deactivateProjectGroup
 } = require('../services/UniversalGroupService');
@@ -77,6 +78,21 @@ function syncGroupForProject(projectOrId, io, context) {
     })
     .catch((err) => {
       console.error(`[ProjectGroup] ${context} failed:`, err.message);
+    });
+
+  // The owner's company-level group, kept on its own promise chain so a builder
+  // group failure can never stop the project group from being created (and vice
+  // versa). Also re-syncs the group name, which is how a company name added
+  // after signup reaches the group.
+  Promise.resolve()
+    .then(() => ensureBuilderGroupForProject(projectOrId, io))
+    .then((result) => {
+      if (result?.isNew) {
+        console.log(`[BuilderGroup] ${context}: created group ${result.room._id} for builder ${result.builder._id}`);
+      }
+    })
+    .catch((err) => {
+      console.error(`[BuilderGroup] ${context} failed:`, err.message);
     });
 }
 
@@ -417,11 +433,20 @@ class ProjectController {
       // 2. Find Projects owned by this user.
       // Public endpoint: bounded and lean so an owner with a large portfolio
       // can't be used to pull unbounded full Mongoose documents.
+      //
+      // `status: 'published'` (was `$ne: 'deleted'`): this endpoint is public and
+      // documented as returning the builder's PUBLISHED projects, but the old
+      // filter also handed out drafts.
+      //
+      // The select paths are nested on purpose. `coverImage` and `startingPrice`
+      // do not exist at the top level — they live under `media` and `pricing` —
+      // so the previous projection silently returned neither, and every card
+      // rendered without an image or a price.
       const projects = await Project.find({
         owner: user._id,
-        status: { $ne: 'deleted' }
+        status: 'published'
       })
-        .select('projectName slug _id coverImage city startingPrice')
+        .select('projectName slug _id city location propertyType projectStatus media.coverImage pricing.startingPrice configuration.bhkOptions configuration.carpetAreaRange')
         .sort('createdAt')
         .limit(200)
         .lean();

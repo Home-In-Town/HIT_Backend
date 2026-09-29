@@ -2,10 +2,11 @@ const mongoose = require('mongoose');
 
 const groupRoomSchema = new mongoose.Schema({
   name: { type: String, required: true, trim: true },
-  // Room type: project-based, area-based, or universal (single community group)
+  // Room type: project-based, builder-based, area-based, or universal (single
+  // community group)
   roomType: {
     type: String,
-    enum: ['project', 'area', 'universal'],
+    enum: ['project', 'builder', 'area', 'universal'],
     required: true,
     index: true
   },
@@ -25,6 +26,23 @@ const groupRoomSchema = new mongoose.Schema({
         return value != null;
       },
       message: 'project is required when roomType is "project"'
+    }
+  },
+  // If builder room, link to the builder (User) whose properties it covers.
+  // A builder room is the company-level group: it lists that builder's
+  // properties and hosts the conversation with them. Mirrors the `project`
+  // guard above so a builder room can never exist without its builder.
+  builder: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null,
+    validate: {
+      validator: function (value) {
+        if (!this || typeof this.get !== 'function') return true;
+        if (this.get('roomType') !== 'builder') return true;
+        return value != null;
+      },
+      message: 'builder is required when roomType is "builder"'
     }
   },
   // If area room, store area metadata
@@ -92,5 +110,23 @@ groupRoomSchema.index(
     name: 'uniq_active_project_room'
   }
 );
+
+// ── One active group per builder ─────────────────────────────────────────────
+// Same reasoning as the project index above: ensureBuilderGroup is called from
+// the project lifecycle and from a backfill, so two concurrent callers could
+// otherwise each insert a room for the same builder. Scoped to active builder
+// rooms, so soft-deleted rooms don't block a fresh one and rooms of other types
+// (builder: null) are unaffected.
+groupRoomSchema.index(
+  { builder: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { roomType: 'builder', active: true },
+    name: 'uniq_active_builder_room'
+  }
+);
+
+// Builder rooms are listed by builder, so this supports the lookup directly.
+groupRoomSchema.index({ builder: 1 });
 
 module.exports = mongoose.model('GroupRoom', groupRoomSchema);
