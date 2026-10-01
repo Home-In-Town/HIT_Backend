@@ -30,6 +30,10 @@ router.post('/rooms/:roomId/attachments', attachmentUpload.single('file'), group
 // Clears the caller's unread badge for this room.
 router.post('/rooms/:roomId/read', groupChatController.markRoomRead);
 router.get('/rooms/:roomId/messages', groupChatController.getMessages);
+// Photos / documents / links shared in the room, for the group-info sheet.
+// Members only, paginated and capped — same membership gate as the messages
+// route above, because a group's media is exactly as private as its messages.
+router.get('/rooms/:roomId/media', groupChatController.getRoomMedia);
 router.post('/rooms/:roomId/messages', groupChatController.postMessage);
 // Remove a message (own message, or any message in a group you own/admin).
 // Media messages also get their R2 object deleted.

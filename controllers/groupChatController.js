@@ -33,6 +33,61 @@ const ROOM_PROJECT_POPULATE = {
 // verification state on the row.
 const ROOM_BUILDER_FIELDS = 'name companyName role isVerified verificationStatus';
 
+/**
+ * Member fields sent to clients for a room's member list.
+ *
+ * `phone` is selected here but is NOT unconditionally shipped: every room-bearing
+ * response goes through sanitizeRoom(), which deletes it for every room type
+ * except builder and project. Selecting it once in a shared constant is what
+ * makes that possible — the previous code repeated the literal
+ * `'name role companyName'` at seven call sites, so any per-room-type rule would
+ * have had to be re-implemented (and sooner or later forgotten) at each of them.
+ */
+const ROOM_MEMBER_FIELDS = 'name role companyName phone';
+
+/**
+ * Room types whose member list is a legitimate contact list.
+ *
+ * A builder group is a company's showcase and a project group is the people
+ * transacting on one property — in both, members expect to be reachable. The
+ * universal room contains EVERY user on the platform, so shipping phone numbers
+ * there would hand every user's number to every other user; area rooms are not
+ * builder showcases either, so they get the same treatment.
+ */
+const PHONE_VISIBLE_ROOM_TYPES = new Set(['builder', 'project']);
+
+/**
+ * Strips member phone numbers from a room payload unless the room type is one
+ * where the member list is meant to be a contact list.
+ *
+ * This runs on the SERVER, deliberately. Hiding the number in the mobile
+ * component would still serialise every universal-room member's phone over the
+ * wire, where anyone with the auth token and a proxy can read it — that is not a
+ * fix, it is a cosmetic change. Modelled on sanitizeMessage() above, which
+ * exists for the same reason on the message path.
+ *
+ * Returns a plain object; mongoose documents are converted so the delete cannot
+ * touch the cached document.
+ *
+ * Exported for the test script — not a route handler.
+ *
+ * @param {Object} room GroupRoom document or plain object (may be null)
+ */
+function sanitizeRoom(room) {
+  if (!room) return room;
+  const obj = typeof room.toObject === 'function' ? room.toObject() : room;
+  if (PHONE_VISIBLE_ROOM_TYPES.has(obj.roomType)) return obj;
+
+  for (const member of obj.members || []) {
+    // The discover list does not populate members, so `user` is still an
+    // ObjectId there — nothing to strip, and `delete` on it would be wrong.
+    if (member?.user && typeof member.user === 'object') delete member.user.phone;
+  }
+  return obj;
+}
+
+exports.sanitizeRoom = sanitizeRoom;
+
 // Roles allowed to put photos / PDFs into ANY group. Ordinary members can read
 // media but not publish it, so a group's media stays curated.
 const MEDIA_UPLOAD_ROLES = ['admin', 'captain'];
@@ -263,9 +318,9 @@ exports.createRoom = async (req, res) => {
 
       const existing = await GroupRoom.findOne({ project: projectId, roomType: 'project', active: true });
       if (existing) {
-        await existing.populate('members.user', 'name role companyName');
+        await existing.populate('members.user', ROOM_MEMBER_FIELDS);
         await existing.populate(ROOM_PROJECT_POPULATE);
-        return res.status(409).json({ error: 'A group already exists for this property', room: existing });
+        return res.status(409).json({ error: 'A group already exists for this property', room: sanitizeRoom(existing) });
       }
 
       const ensured = await ensureProjectGroup(projectId, req.app.get('io'));
@@ -274,9 +329,9 @@ exports.createRoom = async (req, res) => {
       }
 
       const room = ensured.room;
-      await room.populate('members.user', 'name role companyName');
+      await room.populate('members.user', ROOM_MEMBER_FIELDS);
       await room.populate(ROOM_PROJECT_POPULATE);
-      return res.status(201).json({ room });
+      return res.status(201).json({ room: sanitizeRoom(room) });
     }
 
     const room = await GroupRoom.create({
@@ -290,16 +345,16 @@ exports.createRoom = async (req, res) => {
       lastActivity: new Date()
     });
 
-    await room.populate('members.user', 'name role companyName');
+    await room.populate('members.user', ROOM_MEMBER_FIELDS);
 
-    res.status(201).json({ room });
+    res.status(201).json({ room: sanitizeRoom(room) });
   } catch (err) {
     // Unique index on active project rooms — someone created it concurrently.
     if (err?.code === 11000) {
       const existing = await GroupRoom.findOne({ project: req.body.projectId, roomType: 'project', active: true })
-        .populate('members.user', 'name role companyName')
+        .populate('members.user', ROOM_MEMBER_FIELDS)
         .populate(ROOM_PROJECT_POPULATE);
-      return res.status(409).json({ error: 'A group already exists for this property', room: existing });
+      return res.status(409).json({ error: 'A group already exists for this property', room: sanitizeRoom(existing) });
     }
     if (err?.name === 'ValidationError') {
       return res.status(400).json({ error: err.message });
@@ -328,7 +383,7 @@ exports.getRooms = async (req, res) => {
     })
       .populate(ROOM_PROJECT_POPULATE)
       .populate('builder', ROOM_BUILDER_FIELDS)
-      .populate('members.user', 'name role companyName')
+      .populate('members.user', ROOM_MEMBER_FIELDS)
       .populate('createdBy', 'name')
       .sort({ lastActivity: -1 });
 
@@ -358,21 +413,53 @@ exports.getRooms = async (req, res) => {
       .sort({ lastActivity: -1 })
       .limit(120);
 
-    // Builder groups get the same treatment as property groups: a builder whose
-    // only properties are drafts must not become publicly discoverable. Resolved
-    // with ONE distinct() for every candidate rather than a check per room.
-    const builderCandidateIds = discoverCandidates
+    // ── Published project count per builder ────────────────────────────────
+    // Serves two purposes at once with ONE aggregation over every builder room
+    // in the whole response:
+    //
+    //   1. The Groups list shows "N projects" on a company row, so the client
+    //      needs the number, not just a boolean.
+    //   2. A builder whose only properties are drafts must not become publicly
+    //      discoverable — the same rule property groups already get.
+    //
+    // This replaces a `Project.distinct('owner', …)` that only answered (2).
+    // The count is a superset of that answer (count > 0 means "has a published
+    // project"), so deriving the discover gate from the aggregation keys keeps
+    // the query count unchanged instead of adding one. A count query per room
+    // would be an N+1 on a list that routinely holds dozens of groups — the same
+    // reasoning computeUnreadCounts() documents above.
+    const builderRoomIds = [...myRooms, ...discoverCandidates]
       .filter(room => room.roomType === 'builder' && room.builder)
       .map(room => room.builder._id || room.builder);
 
-    let publishedBuilderIds = new Set();
-    if (builderCandidateIds.length > 0) {
-      const ids = await Project.distinct('owner', {
-        owner: { $in: builderCandidateIds },
-        status: 'published'
-      });
-      publishedBuilderIds = new Set(ids.map(String));
+    const projectCountByBuilder = new Map();
+    if (builderRoomIds.length > 0) {
+      const rows = await Project.aggregate([
+        { $match: { owner: { $in: builderRoomIds }, status: 'published' } },
+        { $group: { _id: '$owner', count: { $sum: 1 } } }
+      ]);
+      for (const row of rows) projectCountByBuilder.set(String(row._id), row.count);
     }
+
+    // A builder is discoverable exactly when the aggregation found at least one
+    // published project for them — previously the answer came from distinct().
+    const publishedBuilderIds = new Set(
+      [...projectCountByBuilder.entries()].filter(([, count]) => count > 0).map(([id]) => id)
+    );
+
+    /**
+     * Attaches `projectCount` to a builder room, leaving every other room type
+     * alone: a project room is one property, so "18 projects" there would be
+     * nonsense, and the client only reads the field on company rows.
+     */
+    const withProjectCount = (room) => {
+      const obj = sanitizeRoom(room);
+      if (obj?.roomType === 'builder') {
+        const builderId = String(obj.builder?._id || obj.builder || '');
+        obj.projectCount = projectCountByBuilder.get(builderId) || 0;
+      }
+      return obj;
+    };
 
     const discoverRooms = discoverCandidates
       .filter(room => {
@@ -385,13 +472,20 @@ exports.getRooms = async (req, res) => {
         }
         return true;
       })
-      .slice(0, 50);
+      .slice(0, 50)
+      // sanitizeRoom() runs here too. The discover list does not populate
+      // members today, so there is nothing to strip — routing it through anyway
+      // means a future `.populate('members.user', …)` added here cannot silently
+      // start leaking phone numbers.
+      .map(withProjectCount);
 
     // Unread badge data. Only joined rooms can have unread messages, so the
     // discover list is left untouched.
     const unread = await computeUnreadCounts(userId, myRooms);
     const myRoomsPayload = myRooms.map(room => ({
-      ...room.toObject(),
+      // withProjectCount() already converts the document via sanitizeRoom(),
+      // replacing the previous bare room.toObject().
+      ...withProjectCount(room),
       unreadCount: unread.get(String(room._id)) || 0
     }));
 
@@ -436,11 +530,11 @@ exports.joinRoom = async (req, res) => {
     const fresh = await GroupRoom.findById(roomId)
       .populate(ROOM_PROJECT_POPULATE)
       .populate('builder', ROOM_BUILDER_FIELDS)
-      .populate('members.user', 'name role companyName')
+      .populate('members.user', ROOM_MEMBER_FIELDS)
       .populate('createdBy', 'name');
 
     if (!added) {
-      return res.status(200).json({ message: 'Already a member', room: fresh });
+      return res.status(200).json({ message: 'Already a member', room: sanitizeRoom(fresh) });
     }
 
     // Post system message
@@ -451,7 +545,7 @@ exports.joinRoom = async (req, res) => {
       content: `${req.user.name} joined the group`
     });
 
-    res.status(200).json({ room: fresh });
+    res.status(200).json({ room: sanitizeRoom(fresh) });
   } catch (err) {
     console.error('joinRoom error:', err);
     res.status(500).json({ error: err.message });
@@ -514,10 +608,10 @@ exports.joinProjectRoom = async (req, res) => {
     const fresh = await GroupRoom.findById(room._id)
       .populate(ROOM_PROJECT_POPULATE)
       .populate('builder', ROOM_BUILDER_FIELDS)
-      .populate('members.user', 'name role companyName')
+      .populate('members.user', ROOM_MEMBER_FIELDS)
       .populate('createdBy', 'name');
 
-    return res.status(200).json({ room: fresh, joined: !alreadyMember });
+    return res.status(200).json({ room: sanitizeRoom(fresh), joined: !alreadyMember });
   } catch (err) {
     console.error('joinProjectRoom error:', err);
     return res.status(500).json({ error: err.message });
@@ -930,6 +1024,89 @@ exports.getMessages = async (req, res) => {
     res.status(200).json({ messages: payload, page, limit });
   } catch (err) {
     console.error('getMessages error:', err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+/**
+ * GET /api/group-chat/rooms/:roomId/media
+ *
+ * The photos / documents / links shared in a room, for the group-info sheet's
+ * "Media & Links" section. The thread itself already renders media inline from
+ * the message list, but group info needs them without paging back through the
+ * whole history, so this is a separate, narrower query.
+ *
+ * Membership is checked exactly the way getMessages() checks it — a room's media
+ * is as private as its messages, so a non-member (or an unauthenticated caller,
+ * stopped earlier by `protect`) gets 403 and nothing else.
+ *
+ * Both queries are paginated and capped. An unbounded list would be a real
+ * problem here: the universal room holds every user's messages, and media/link
+ * history grows without limit.
+ */
+exports.getRoomMedia = async (req, res) => {
+  try {
+    const { roomId } = req.params;
+    const userId = req.user._id;
+    const page = Math.max(parseInt(req.query.page) || 1, 1);
+    // Hard ceiling, not just a default: a caller asking for limit=100000 must not
+    // be able to turn this into a full history dump. The lower bound matters too —
+    // a negative value reaches the driver as "close the cursor early", which is
+    // confusing rather than wrong, so it is normalised away here.
+    const limit = Math.max(Math.min(parseInt(req.query.limit) || 30, 60), 1);
+    const skip = (page - 1) * limit;
+
+    if (!mongoose.Types.ObjectId.isValid(String(roomId))) {
+      return res.status(400).json({ error: 'Invalid roomId' });
+    }
+
+    // Verify active membership — same filter and same 403 as getMessages().
+    const room = await GroupRoom.findOne({ _id: roomId, active: true, 'members.user': userId });
+    if (!room) {
+      return res.status(403).json({ error: 'Not a member of this room' });
+    }
+
+    const [mediaDocs, linkDocs] = await Promise.all([
+      // Matches the existing { messageType: 1, room: 1 } index on GroupMessage.
+      GroupMessage.find({
+        room: roomId,
+        deleted: false,
+        messageType: { $in: ['image', 'file'] }
+      })
+        .populate('sender', MESSAGE_SENDER_FIELDS)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit),
+
+      // Links are not a stored field, so they have to be recognised in the text.
+      // A regex is unindexed, but it only ever scans the text messages of ONE
+      // room and is bounded by skip/limit — far cheaper than the alternative,
+      // which would be extracting URLs from the room's entire history in Node.
+      // Extracting the URL itself is left to the client, which already has to
+      // parse the message text for the thread view.
+      GroupMessage.find({
+        room: roomId,
+        deleted: false,
+        messageType: 'text',
+        content: { $regex: 'https?://', $options: 'i' }
+      })
+        .populate('sender', MESSAGE_SENDER_FIELDS)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+    ]);
+
+    // sanitizeMessage() strips the sender's phone for everything that is not an
+    // inventory card. Media and links never are, so no number ships from here —
+    // that is precisely the leak sanitizeMessage() was written to close.
+    res.status(200).json({
+      media: mediaDocs.map(sanitizeMessage),
+      links: linkDocs.map(sanitizeMessage),
+      page,
+      limit
+    });
+  } catch (err) {
+    console.error('getRoomMedia error:', err);
     res.status(500).json({ error: err.message });
   }
 };
