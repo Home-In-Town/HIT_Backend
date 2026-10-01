@@ -108,6 +108,33 @@ app.use(
 app.use(cookieParser());
 app.use(express.json({ limit: '10mb' }));
 
+// ============ PROXY TRUST ============
+// Cloud Run puts exactly one Google front end in front of the container and
+// OVERWRITES X-Forwarded-For with the single client IP rather than appending to it.
+// With `1`, express reads the rightmost XFF entry, which on Cloud Run is that one
+// real client IP, and a value a client tries to inject is discarded by the front
+// end, so it cannot be spoofed. `true` reads the LEFTMOST entry instead — the same
+// value today, but client-controlled the moment the header ever carries more than
+// one hop, so it is rejected on principle. This was previously unset, which meant
+// req.ip was the Google front end's socket address and req.ips was [] no matter
+// what XFF said: every anonymous caller shared one rate-limit bucket. Must stay
+// above app.use(generalLimiter) below, since the key generators read req.ip.
+app.set('trust proxy', 1);
+
+// TEMPORARY — remove after the deploy-time trust-proxy check (see .agents/tasks/rate-limit-fix-2026-10-01/plan.md step 4)
+// Sampled to /api/health only so log volume stays sane. Confirms on the real
+// Cloud Run deployment that req.ip is the client IP and not a Google address.
+app.use((req, res, next) => {
+  if (req.path === '/api/health') {
+    logger.info('trust-proxy probe', {
+      ip: req.ip,
+      xForwardedFor: req.headers['x-forwarded-for'],
+      ips: req.ips,
+    });
+  }
+  next();
+});
+
 // ============ RATE LIMITING PRE-EXTRACTION ============
 // Extract JWT before rate limiter to enable User-ID based limiting
 app.use((req, res, next) => {
