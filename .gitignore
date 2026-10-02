@@ -56,3 +56,6 @@ CALL_API_ENDPOINTS.md
 fix-admin-dupes.js
 list-users.js
 update-admin-phone.js
+
+# Workflow agent working notes (plans, reviews, build logs) — not application code.
+.agents/
