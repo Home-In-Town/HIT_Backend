@@ -121,19 +121,11 @@ app.use(express.json({ limit: '10mb' }));
 // above app.use(generalLimiter) below, since the key generators read req.ip.
 app.set('trust proxy', 1);
 
-// TEMPORARY — remove after the deploy-time trust-proxy check (see .agents/tasks/rate-limit-fix-2026-10-01/plan.md step 4)
-// Sampled to /api/health only so log volume stays sane. Confirms on the real
-// Cloud Run deployment that req.ip is the client IP and not a Google address.
-app.use((req, res, next) => {
-  if (req.path === '/api/health') {
-    logger.info('trust-proxy probe', {
-      ip: req.ip,
-      xForwardedFor: req.headers['x-forwarded-for'],
-      ips: req.ips,
-    });
-  }
-  next();
-});
+// Verified on revision 00165-5rn (2 Oct 2026): a probe on /api/health reported
+// req.ip = 2401:4900:7975:... with X-Forwarded-For carrying that same single
+// value and req.ips = [that value] — i.e. the real client address, not a Google
+// front-end one, and exactly one hop in the header as assumed above. The probe
+// was removed once it had answered that question.
 
 // ============ RATE LIMITING PRE-EXTRACTION ============
 // Extract JWT before rate limiter to enable User-ID based limiting
